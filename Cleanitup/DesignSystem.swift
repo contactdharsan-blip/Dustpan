@@ -29,8 +29,12 @@ enum Theme {
     static let success = Color(hex: 0x10B981)
     static let warning = Color(hex: 0xF59E0B)
     static let error = Color(hex: 0xEF4444)
+    static let alert = Color(hex: 0xF87171)    // §2.5 soft alert
+    static let neutral = Color(hex: 0x6B7280)  // §2.5 completes success→warning→neutral scale
 
     // MARK: Radius (§4.2)
+    static let radiusSm: CGFloat = 8
+    static let radiusMd: CGFloat = 12
     static let radiusLg: CGFloat = 16
     static let radiusXl: CGFloat = 20
     static let radius2xl: CGFloat = 24
@@ -93,6 +97,7 @@ extension View {
 /// Two depth layers create the "alive" dark canvas: a fixed near-black wash with
 /// ultra-subtle, same-family radial glows that slowly drift. Opacity kept ≤ 0.10.
 struct AmbientBackground: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var drift = false
 
     var body: some View {
@@ -106,6 +111,8 @@ struct AmbientBackground: View {
         }
         .ignoresSafeArea()
         .onAppear {
+            // §5.4: looping ambient motion is disabled under Reduce Motion.
+            guard !reduceMotion else { return }
             withAnimation(.easeInOut(duration: 28).repeatForever(autoreverses: true)) {
                 drift = true
             }
@@ -116,6 +123,37 @@ struct AmbientBackground: View {
         RadialGradient(colors: [color, .clear], center: center, startRadius: 0, endRadius: 520)
             .blendMode(.screen)
     }
+}
+
+// MARK: - Shadows & typography helpers (§4.3, §3.3)
+
+extension View {
+    /// §4.3 `--shadow-glow` / `--shadow-interactive`: a soft, same-family accent halo.
+    func shadowGlow(_ color: Color = Theme.primary, radius: CGFloat = 20, strength: Double = 0.4) -> some View {
+        shadow(color: color.opacity(strength), radius: radius, x: 0, y: 0)
+    }
+
+    /// §3.3 `typo-label`: uppercase, tracked, tertiary — for eyebrow/section labels.
+    func typoLabel() -> some View {
+        self.font(.caption2.weight(.semibold))
+            .textCase(.uppercase)
+            .tracking(0.6)
+            .foregroundStyle(Theme.textTertiary)
+    }
+}
+
+/// §3.3 type roles mapped to San Francisco (see the font note above).
+enum Typo {
+    static let metric = Font.system(.title2, weight: .bold)   // pair with .monospacedDigit()
+    static let h3 = Font.title3.weight(.semibold)
+    static let cardHeading = Font.headline.weight(.medium)
+    static let mono = Font.system(.caption, design: .monospaced)
+}
+
+/// §5.4 helper: the signature spring, or `nil` (instant) under Reduce Motion.
+/// Read `@Environment(\.accessibilityReduceMotion)` at the call site and pass it in.
+func motionSafeSpring(_ reduceMotion: Bool) -> Animation? {
+    reduceMotion ? nil : Theme.spring
 }
 
 // MARK: - Pill badge (§7.6)
