@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The planned cleaning surfaces. v1.0 ships the trust-first core (uninstall,
-/// orphans, large files); developer caches are the v1.1 differentiation bet.
+/// orphans, large files); developer caches are the v1.1 differentiation bet —
+/// and the first one wired to the REAL SafeDeleteEngine.
 enum CleanupCategory: String, CaseIterable, Identifiable {
     case appUninstaller = "App Uninstaller"
     case orphanScan = "Orphaned Files"
@@ -9,6 +10,9 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     case developerCaches = "Developer Caches"
 
     var id: String { rawValue }
+
+    /// Only this category performs a real on-disk scan + trash today.
+    var isLive: Bool { self == .developerCaches }
 
     var systemImage: String {
         switch self {
@@ -22,70 +26,22 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     var milestone: String {
         switch self {
         case .appUninstaller, .orphanScan, .largeFiles: return "v1.0"
-        case .developerCaches: return "v1.1"
+        case .developerCaches: return "v1.1 · live"
         }
     }
 
     var blurb: String {
         switch self {
-        case .appUninstaller:
-            return "Remove an app and every leftover file it left in ~/Library."
-        case .orphanScan:
-            return "Find files left behind by apps you already deleted."
-        case .largeFiles:
-            return "Surface your biggest files — you decide what moves to Trash."
-        case .developerCaches:
-            return "Reclaim Xcode, simulator, node_modules and Docker bloat over known-safe paths."
+        case .appUninstaller: return "Remove an app and every leftover file it left in ~/Library."
+        case .orphanScan: return "Find files left behind by apps you already deleted."
+        case .largeFiles: return "Surface your biggest files — you decide what moves to Trash."
+        case .developerCaches: return "Reclaim Xcode, simulator, and package-manager caches over known-safe paths."
         }
     }
 }
 
-// MARK: - Mock scan model
-
-/// A single discovered item. `kind` carries the Safe/Caution risk label.
-struct ScanItem: Identifiable {
-    let id = UUID()
-    let name: String
-    let path: String
-    let bytes: Int64
-    let kind: StatusKind
-
-    var sizeText: String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
-
-    /// Sample results per category. Developer-cache sizes are the real figures
-    /// measured on a developer Mac (see PRD.md §2) — CoreSimulator is the worst offender.
-    static func samples(for category: CleanupCategory, deep: Bool) -> [ScanItem] {
-        switch category {
-        case .developerCaches:
-            var items = [
-                ScanItem(name: "CoreSimulator", path: "~/Library/Developer/CoreSimulator", bytes: 25_000_000_000, kind: .safe),
-                ScanItem(name: "Xcode DerivedData", path: "~/Library/Developer/Xcode/DerivedData", bytes: 8_200_000_000, kind: .safe),
-                ScanItem(name: "iOS DeviceSupport", path: "~/Library/Developer/Xcode/iOS DeviceSupport", bytes: 5_700_000_000, kind: .caution),
-                ScanItem(name: "npm cache", path: "~/.npm", bytes: 3_800_000_000, kind: .safe),
-            ]
-            if deep {
-                items.append(ScanItem(name: "node_modules (open-design)", path: "~/open-design/node_modules", bytes: 1_300_000_000, kind: .caution))
-                items.append(ScanItem(name: "Homebrew cache", path: "~/Library/Caches/Homebrew", bytes: 734_000_000, kind: .safe))
-            }
-            return items
-        case .appUninstaller:
-            return [
-                ScanItem(name: "Spotify", path: "/Applications/Spotify.app", bytes: 1_200_000_000, kind: .safe),
-                ScanItem(name: "Figma", path: "/Applications/Figma.app", bytes: 980_000_000, kind: .safe),
-                ScanItem(name: "Zoom", path: "/Applications/zoom.us.app", bytes: 410_000_000, kind: .caution),
-            ]
-        case .orphanScan:
-            return [
-                ScanItem(name: "com.oldapp.plist", path: "~/Library/Preferences/com.oldapp.plist", bytes: 12_000, kind: .safe),
-                ScanItem(name: "OldApp Support", path: "~/Library/Application Support/OldApp", bytes: 240_000_000, kind: .safe),
-            ]
-        case .largeFiles:
-            return deep ? [
-                ScanItem(name: "archive.zip", path: "~/Downloads/archive.zip", bytes: 6_400_000_000, kind: .caution),
-                ScanItem(name: "screen-recording.mov", path: "~/Desktop/screen-recording.mov", bytes: 2_100_000_000, kind: .caution),
-            ] : []
-        }
-    }
+extension CleanRisk {
+    var status: StatusKind { self == .safe ? .safe : .caution }
 }
 
 // MARK: - Root
@@ -109,8 +65,7 @@ struct ContentView: View {
             ZStack {
                 AmbientBackground()
                 if let selection {
-                    ScanView(category: selection)
-                        .id(selection)   // fresh scan state per category
+                    ScanView(category: selection).id(selection)
                 } else {
                     ContentUnavailableView("Select a category", systemImage: "sidebar.left")
                         .foregroundStyle(Theme.textTertiary)
@@ -121,7 +76,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Scan flow (showcases the component library)
+// MARK: - Scan flow
 
 struct ScanView: View {
     let category: CleanupCategory
@@ -131,19 +86,20 @@ struct ScanView: View {
 
     @State private var mode: Mode = .quick
     @State private var phase: Phase = .idle
-    @State private var items: [ScanItem] = []
+    @State private var items: [ScannedItem] = []
+    @State private var selected: Set<ScannedItem.ID> = []
     @State private var filter = ""
     @State private var toast: String?
+    @State private var showConfirm = false
     @State private var scanTask: Task<Void, Never>?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    private var filtered: [ScanItem] {
-        guard !filter.isEmpty else { return items }
-        return items.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+    private var filtered: [ScannedItem] {
+        filter.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(filter) }
     }
-
-    private var totalBytes: Int64 { items.reduce(0) { $0 + $1.bytes } }
+    private var selectedItems: [ScannedItem] { items.filter { selected.contains($0.id) } }
+    private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
 
     var body: some View {
         ScrollView {
@@ -157,9 +113,17 @@ struct ScanView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .toast(message: $toast, style: .success)
+        .confirmationDialog(
+            "Move \(selected.count) item\(selected.count == 1 ? "" : "s") to Trash?",
+            isPresented: $showConfirm, titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) { trashSelected() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Items go to the Trash — you can restore them from there. Nothing is permanently deleted.")
+        }
     }
 
-    // Header card
     private var header: some View {
         HStack(spacing: 16) {
             Image(systemName: category.systemImage)
@@ -177,14 +141,13 @@ struct ScanView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
-            PillBadge(text: category.milestone)
+            PillBadge(text: category.milestone, tint: category.isLive ? Theme.success : Theme.neutral)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
     }
 
-    // Mode switcher + scan button
     private var controls: some View {
         HStack(spacing: 14) {
             ModeSwitcher(options: Mode.allCases, title: { $0.rawValue }, selection: $mode)
@@ -199,13 +162,14 @@ struct ScanView: View {
         }
     }
 
-    // Phase-driven content (the §7.0 four-state contract)
     @ViewBuilder private var content: some View {
         switch phase {
         case .idle:
             EmptyStateView(
                 title: "Ready when you are",
-                message: "Run a \(mode.rawValue.lowercased()) scan to see what \(category.rawValue.lowercased()) can be safely reclaimed. Nothing is deleted without your review.",
+                message: category.isLive
+                    ? "Run a scan to measure your real developer caches. Nothing is deleted without your review and confirmation."
+                    : "This category is a preview of the design. Run a scan to see the flow — deletion is wired only for Developer Caches today.",
                 systemImage: "sparkle.magnifyingglass"
             )
             .frame(maxWidth: .infinity)
@@ -232,30 +196,36 @@ struct ScanView: View {
             GlassTextField(placeholder: "Filter results", text: $filter)
             VStack(spacing: 12) {
                 ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
-                    ResultCard(item: item, index: index, reduceMotion: reduceMotion)
+                    ResultCard(
+                        item: item, index: index,
+                        isSelected: selected.contains(item.id),
+                        reduceMotion: reduceMotion,
+                        onToggle: { toggle(item) }
+                    )
                 }
             }
 
         case .empty:
             EmptyStateView(
                 title: "Nothing to clean",
-                message: "A \(mode.rawValue.lowercased()) scan found no reclaimable \(category.rawValue.lowercased()). Try a deep scan to look harder.",
+                message: "A \(mode.rawValue.lowercased()) scan found nothing reclaimable here.",
                 systemImage: "checkmark.seal",
-                actionTitle: "Deep scan",
-                action: { mode = .deep; startScan() }
+                actionTitle: category.isLive ? "Deep scan" : nil,
+                action: category.isLive ? { mode = .deep; startScan() } : nil
             )
             .frame(maxWidth: .infinity)
         }
     }
 
-    // Results summary: metrics + primary action
     private var summary: some View {
         HStack(alignment: .center, spacing: 28) {
-            CountUpMetric(value: ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file), label: "Reclaimable")
-            CountUpMetric(value: "\(items.count)", label: "Items")
+            CountUpMetric(value: ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file), label: "Selected")
+            CountUpMetric(value: "\(selected.count)/\(items.count)", label: "Items")
             Spacer()
-            Button("Move \(items.count) to Trash") { confirmTrash() }
+            Button("Move to Trash") { showConfirm = true }
                 .buttonStyle(PrimaryButtonStyle())
+                .disabled(selected.isEmpty)
+                .opacity(selected.isEmpty ? 0.5 : 1)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -264,55 +234,125 @@ struct ScanView: View {
 
     // MARK: Actions
 
+    private func toggle(_ item: ScannedItem) {
+        if selected.contains(item.id) { selected.remove(item.id) } else { selected.insert(item.id) }
+    }
+
     private func startScan() {
         scanTask?.cancel()
-        filter = ""
+        filter = ""; selected = []
         setPhase(.scanning)
         scanTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: mode == .deep ? 1_500_000_000 : 900_000_000)
+            let found: [ScannedItem]
+            if category.isLive {
+                // Real read-only scan off the main thread (sizing can take a moment).
+                found = await Task.detached(priority: .userInitiated) {
+                    SafeDeleteEngine.scanDeveloperCaches()
+                }.value
+            } else {
+                try? await Task.sleep(nanoseconds: mode == .deep ? 1_200_000_000 : 800_000_000)
+                found = ScanView.demoItems(for: category, deep: mode == .deep)
+            }
             guard !Task.isCancelled else { return }
-            let found = ScanItem.samples(for: category, deep: mode == .deep)
             items = found
+            // Pre-select the .safe items; leave .caution for the user to opt into.
+            selected = Set(found.filter { $0.risk == .safe }.map(\.id))
             setPhase(found.isEmpty ? .empty : .results)
             if !found.isEmpty {
                 let size = ByteCountFormatter.string(fromByteCount: found.reduce(0) { $0 + $1.bytes }, countStyle: .file)
-                toast = "Found \(size) across \(found.count) items"
+                toast = category.isLive
+                    ? "Found \(size) of real caches across \(found.count) paths"
+                    : "Found \(size) across \(found.count) items (demo)"
             }
         }
     }
 
-    private func confirmTrash() {
-        toast = "Preview first — nothing deleted yet (demo)"
+    private func trashSelected() {
+        let chosen = selectedItems
+        guard !chosen.isEmpty else { return }
+        guard category.isLive else {
+            toast = "Demo category — deletion is wired only for Developer Caches"
+            return
+        }
+        let urls = chosen.map(\.url)
+        Task { @MainActor in
+            let outcomes = await Task.detached { SafeDeleteEngine.moveToTrash(urls) }.value
+            let succeeded = zip(chosen, outcomes).filter { $0.1.success }
+            let trashedIDs = Set(succeeded.map { $0.0.id })
+            let reclaimed = outcomes.filter(\.success).reduce(0) { $0 + $1.reclaimedBytes }
+
+            if reduceMotion { items.removeAll { trashedIDs.contains($0.id) } }
+            else { withAnimation(Theme.spring) { items.removeAll { trashedIDs.contains($0.id) } } }
+            selected.subtract(trashedIDs)
+
+            let sizeStr = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
+            let refused = outcomes.count - succeeded.count
+            toast = "Moved \(succeeded.count) to Trash · \(sizeStr) reclaimed" + (refused > 0 ? " · \(refused) refused" : "")
+            if items.isEmpty { setPhase(.empty) }
+        }
     }
 
     private func setPhase(_ newPhase: Phase) {
         if reduceMotion { phase = newPhase }
         else { withAnimation(Theme.spring) { phase = newPhase } }
     }
+
+    // Mock data for the not-yet-live categories (clearly labeled in the UI).
+    static func demoItems(for category: CleanupCategory, deep: Bool) -> [ScannedItem] {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        func mk(_ name: String, _ rel: String, _ bytes: Int64, _ risk: CleanRisk, _ detail: String) -> ScannedItem {
+            ScannedItem(name: name, url: home.appendingPathComponent(rel), bytes: bytes, risk: risk, detail: detail)
+        }
+        switch category {
+        case .appUninstaller:
+            return [
+                mk("Spotify", "Applications/Spotify.app", 1_200_000_000, .safe, "App + ~/Library leftovers"),
+                mk("Figma", "Applications/Figma.app", 980_000_000, .safe, "App + caches"),
+                mk("Zoom", "Applications/zoom.us.app", 410_000_000, .caution, "Check for background helper"),
+            ]
+        case .orphanScan:
+            return [
+                mk("OldApp Support", "Library/Application Support/OldApp", 240_000_000, .safe, "App already deleted"),
+                mk("com.oldapp.plist", "Library/Preferences/com.oldapp.plist", 12_000, .safe, "Orphaned preference"),
+            ]
+        case .largeFiles:
+            return deep ? [
+                mk("archive.zip", "Downloads/archive.zip", 6_400_000_000, .caution, "You decide — read-only find"),
+                mk("screen-recording.mov", "Desktop/screen-recording.mov", 2_100_000_000, .caution, "You decide"),
+            ] : []
+        case .developerCaches:
+            return []
+        }
+    }
 }
 
 // MARK: - Result row (§5.2 staggerItem)
 
 struct ResultCard: View {
-    let item: ScanItem
+    let item: ScannedItem
     let index: Int
+    let isSelected: Bool
     let reduceMotion: Bool
+    let onToggle: () -> Void
 
     @State private var shown = false
 
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: "doc.fill")
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 32, height: 32)
-                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: Theme.radiusSm, style: .continuous))
+            Button(action: onToggle) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(isSelected ? Theme.primary : Theme.textTertiary)
+            }
+            .buttonStyle(.plain)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(item.name).font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
-                Text(item.path).font(Typo.mono).foregroundStyle(Theme.textTertiary).lineLimit(1).truncationMode(.middle)
+                Text(item.displayPath).font(Typo.mono).foregroundStyle(Theme.textTertiary)
+                    .lineLimit(1).truncationMode(.middle)
             }
             Spacer()
-            StatusBadge(kind: item.kind)
+            StatusBadge(kind: item.risk.status)
             Text(item.sizeText)
                 .font(.subheadline.weight(.semibold)).monospacedDigit()
                 .foregroundStyle(Theme.textPrimary)
@@ -332,6 +372,6 @@ struct ResultCard: View {
 
 #Preview {
     ContentView()
-        .frame(width: 860, height: 600)
+        .frame(width: 880, height: 620)
         .preferredColorScheme(.dark)
 }
