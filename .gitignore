@@ -1,0 +1,40 @@
+# Xcode / macOS
+.DS_Store
+*.swp
+*~.nib
+build/
+DerivedData/
+*.xcuserstate
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode per-user data (keep shared schemes; ignore user state)
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# Build artifacts / distribution
+*.app
+*.dmg
+
+# Secrets / signing (never commit)
+*.p12
+*.mobileprovision
+*.cer
+ExportOptions.plist
+
+# Editor noise
+.idea/
+.vscode/
+
+# Internal planning notes (kept local; PRD.md at root is the public artifact)
+tasks/

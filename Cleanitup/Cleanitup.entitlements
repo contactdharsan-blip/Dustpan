@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Intentionally NOT sandboxed: a real cleaner needs Full Disk Access to scan
+	     ~/Library, caches, and app leftovers. Full Disk Access is incompatible with
+	     the App Sandbox, which is why this app is direct-distributed (notarized DMG +
+	     Homebrew Cask) and not on the Mac App Store. See PRD.md §7. -->
+	<key>com.apple.security.app-sandbox</key>
+	<false/>
+</dict>
+</plist>
