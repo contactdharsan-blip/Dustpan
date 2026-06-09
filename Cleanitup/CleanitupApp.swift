@@ -11,6 +11,8 @@ struct CleanitupApp: App {
         WindowGroup {
             ContentView()
                 .frame(minWidth: 760, minHeight: 480)
+                .tint(Theme.primary)               // emerald accent (§2.4)
+                .preferredColorScheme(.dark)       // dark-first canvas (§1)
         }
         .windowResizability(.contentMinSize)
     }
