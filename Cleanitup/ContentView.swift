@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import QuickLook
+import Observation
 
 /// The cleaning surfaces. As of Phase 1 ALL categories run real engines:
 /// uninstall + orphans (UninstallEngine), large files (LargeFileEngine),
@@ -91,7 +92,14 @@ struct ContentView: View {
     @State private var selection: SidebarItem? = .overview
     /// App-scoped so sidebar round-trips don't restart the dashboard measurement.
     @State private var store = StatsStore()
+    /// App-scoped scan state (same pattern as StatsStore): results and in-flight
+    /// scans survive sidebar switches — the view dies, the session doesn't.
+    @State private var scanSessions: [CleanupCategory: ScanSession] = Dictionary(
+        uniqueKeysWithValues: CleanupCategory.allCases.map { ($0, ScanSession()) })
+    @State private var uninstallSession = UninstallSession()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
+    @State private var showPermissionGate = false
 
     var body: some View {
         NavigationSplitView {
@@ -126,9 +134,11 @@ struct ContentView: View {
                     SystemDataView(store: store).id(SidebarItem.systemData)
                 case .category(.appUninstaller):
                     // Pick-an-app flow — a different shape from scan-everything.
-                    UninstallView().id(SidebarItem.category(.appUninstaller))
+                    UninstallView(session: uninstallSession).id(SidebarItem.category(.appUninstaller))
                 case .category(let category):
-                    ScanView(category: category).id(category)
+                    // Force-unwrap is total by construction: the dictionary is
+                    // initialized over CleanupCategory.allCases.
+                    ScanView(category: category, session: scanSessions[category]!).id(category)
                 case .history:
                     HistoryView().id(SidebarItem.history)
                 case nil:
@@ -138,38 +148,62 @@ struct ContentView: View {
             }
             .animation(motionSafeSpring(reduceMotion), value: selection)
         }
+        // The one-time permission moment: modal over the whole split view, so
+        // no scan entry point (Overview, System Data, Large Files…) can fire a
+        // TCC dialog behind it. Dismissal — by Continue OR Skip — is the single
+        // write path for the flag and starts the gated first scan.
+        .onAppear { if !permissionFlowCompleted { showPermissionGate = true } }
+        .sheet(isPresented: $showPermissionGate, onDismiss: {
+            permissionFlowCompleted = true
+            if store.snapshot == nil { store.refresh() }
+        }) {
+            PermissionGateView()
+                .interactiveDismissDisabled()
+        }
     }
 }
 
 // MARK: - Scan flow
 
-struct ScanView: View {
-    let category: CleanupCategory
-
+/// Per-category scan state, hoisted out of the view (the StatsStore pattern) so
+/// results — and scans still in flight — survive sidebar switches. The running
+/// scan Task writes into the session it captured, not into dead view @State.
+@MainActor @Observable final class ScanSession {
     enum Mode: String, CaseIterable { case quick = "Quick", deep = "Deep" }
     enum Phase: Equatable { case idle, scanning, results, empty }
 
-    @State private var mode: Mode = .quick
-    @State private var phase: Phase = .idle
-    @State private var items: [ScannedItem] = []
-    @State private var selected: Set<ScannedItem.ID> = []
-    @State private var filter = ""
-    @State private var toast: String?
-    @State private var toastStyle: ToastStyle = .success
-    @State private var showConfirm = false
-    @State private var scanTask: Task<Void, Never>?
+    var mode: Mode = .quick
+    var phase: Phase = .idle
+    var items: [ScannedItem] = []
+    var selected: Set<ScannedItem.ID> = []
+    var filter = ""
     /// Refusal reasons per item (SafeDeleteEngine promises these are surfaced,
     /// never silently swallowed). Cleared on every new scan.
-    @State private var trashErrors: [ScannedItem.ID: String] = [:]
+    var trashErrors: [ScannedItem.ID: String] = [:]
+    var toast: String?
+    var toastStyle: ToastStyle = .success
+    var scanTask: Task<Void, Never>?
+}
+
+struct ScanView: View {
+    typealias Mode = ScanSession.Mode
+    typealias Phase = ScanSession.Phase
+
+    let category: CleanupCategory
+    @Bindable var session: ScanSession
+
+    /// Transient chrome only — everything that should outlive the view lives in the session.
+    @State private var showConfirm = false
     /// Quick Look target — "see it before you trash it".
     @State private var quickLookURL: URL?
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var filtered: [ScannedItem] {
-        filter.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+        session.filter.isEmpty ? session.items
+            : session.items.filter { $0.name.localizedCaseInsensitiveContains(session.filter) }
     }
-    private var selectedItems: [ScannedItem] { items.filter { selected.contains($0.id) } }
+    private var selectedItems: [ScannedItem] { session.items.filter { session.selected.contains($0.id) } }
     private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
 
     var body: some View {
@@ -183,10 +217,10 @@ struct ScanView: View {
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .toast(message: $toast, style: toastStyle)
+        .toast(message: $session.toast, style: session.toastStyle)
         .quickLookPreview($quickLookURL)
         .confirmationDialog(
-            "Move \(selected.count) item\(selected.count == 1 ? "" : "s") to Trash?",
+            "Move \(session.selected.count) item\(session.selected.count == 1 ? "" : "s") to Trash?",
             isPresented: $showConfirm, titleVisibility: .visible
         ) {
             Button("Move to Trash", role: .destructive) { trashSelected() }
@@ -232,28 +266,28 @@ struct ScanView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 14) {
                 if category.supportsModes {
-                    ModeSwitcher(options: Mode.allCases, title: { $0.rawValue }, selection: $mode)
+                    ModeSwitcher(options: Mode.allCases, title: { $0.rawValue }, selection: $session.mode)
                         .frame(maxWidth: 220)
                         // Locked mid-scan so results/copy always describe the mode that ran.
-                        .disabled(phase == .scanning)
-                        .opacity(phase == .scanning ? 0.5 : 1)
+                        .disabled(session.phase == .scanning)
+                        .opacity(session.phase == .scanning ? 0.5 : 1)
                 }
                 Spacer()
-                if phase == .scanning {
-                    Button("Cancel") { scanTask?.cancel(); setPhase(.idle) }
+                if session.phase == .scanning {
+                    Button("Cancel") { session.scanTask?.cancel(); setPhase(.idle) }
                         .buttonStyle(GlassButtonStyle())
                 }
-                if phase == .results || phase == .empty {
+                if session.phase == .results || session.phase == .empty {
                     Button("Rescan") { startScan() }.buttonStyle(GlassButtonStyle())
                 }
-                Button(phase == .scanning ? "Scanning…" : "Scan") { startScan() }
+                Button(session.phase == .scanning ? "Scanning…" : "Scan") { startScan() }
                     .buttonStyle(PrimaryButtonStyle())
-                    .disabled(phase == .scanning)
+                    .disabled(session.phase == .scanning)
             }
             // Honest mode description — modes REALLY differ at the engine level
             // (a category with one honest mode shows no switcher at all).
             let caption = category.supportsModes
-                ? (mode == .deep ? category.deepCaption : category.quickCaption)
+                ? (session.mode == .deep ? category.deepCaption : category.quickCaption)
                 : category.quickCaption
             if !caption.isEmpty {
                 Text(caption)
@@ -265,7 +299,7 @@ struct ScanView: View {
     }
 
     @ViewBuilder private var content: some View {
-        switch phase {
+        switch session.phase {
         case .idle:
             EmptyStateView(
                 title: "Ready when you are",
@@ -293,45 +327,87 @@ struct ScanView: View {
 
         case .results:
             summary
-            Text("Safe items are pre-selected — Caution items are left for you to opt into.")
+            Text(category == .orphanScan
+                 ? "Grouped by the app the files belonged to — the header selects a whole group. Everything is Caution: verify before trashing."
+                 : "Safe items are pre-selected — Caution items are left for you to opt into.")
                 .font(.caption)
                 .foregroundStyle(Theme.textTertiary)
-            GlassTextField(placeholder: "Filter results", text: $filter)
-            VStack(spacing: 12) {
-                ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
-                    ResultCard(
-                        item: item, index: index,
-                        isSelected: selected.contains(item.id),
-                        errorText: trashErrors[item.id],
-                        reduceMotion: reduceMotion,
-                        onToggle: { toggle(item) },
-                        onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) },
-                        onPreview: category == .largeFiles ? { quickLookURL = item.url } : nil
-                    )
+            GlassTextField(placeholder: "Filter results", text: $session.filter)
+            if category == .orphanScan {
+                orphanGroupList
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
+                        resultCard(item: item, index: index)
+                    }
                 }
             }
 
         case .empty:
             EmptyStateView(
                 title: "Nothing to clean",
-                message: "A \(category.supportsModes ? mode.rawValue.lowercased() + " " : "")scan found nothing reclaimable here.",
+                message: "A \(category.supportsModes ? session.mode.rawValue.lowercased() + " " : "")scan found nothing reclaimable here.",
                 systemImage: "checkmark.seal",
-                actionTitle: category.supportsModes && mode == .quick ? "Deep scan" : nil,
-                action: category.supportsModes && mode == .quick ? { mode = .deep; startScan() } : nil
+                actionTitle: category.supportsModes && session.mode == .quick ? "Deep scan" : nil,
+                action: category.supportsModes && session.mode == .quick ? { session.mode = .deep; startScan() } : nil
             )
             .frame(maxWidth: .infinity)
         }
     }
 
+    private func resultCard(item: ScannedItem, index: Int) -> some View {
+        ResultCard(
+            item: item, index: index,
+            isSelected: session.selected.contains(item.id),
+            errorText: session.trashErrors[item.id],
+            reduceMotion: reduceMotion,
+            onToggle: { toggle(item) },
+            onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) },
+            onPreview: category == .largeFiles ? { quickLookURL = item.url } : nil
+        )
+    }
+
+    /// Orphans linked back to the app they belonged to: grouped by vendor prefix
+    /// (the exact level the orphan inference runs at — no name-guessing), biggest
+    /// group first. Items inside keep the engine's size ordering.
+    private var orphanGroups: [(owner: String, items: [ScannedItem])] {
+        Dictionary(grouping: filtered) { $0.ownerApp ?? "unknown" }
+            .map { (owner: $0.key, items: $0.value) }
+            .sorted { lhs, rhs in
+                lhs.items.reduce(0) { $0 + $1.bytes } > rhs.items.reduce(0) { $0 + $1.bytes }
+            }
+    }
+
+    private var orphanGroupList: some View {
+        VStack(spacing: 12) {
+            ForEach(orphanGroups, id: \.owner) { group in
+                OrphanGroupHeader(
+                    owner: group.owner,
+                    items: group.items,
+                    selectedCount: group.items.filter { session.selected.contains($0.id) }.count,
+                    onToggleAll: { toggleGroup(group.items) })
+                ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
+                    resultCard(item: item, index: index)
+                }
+            }
+        }
+    }
+
+    private func toggleGroup(_ groupItems: [ScannedItem]) {
+        let ids = Set(groupItems.map(\.id))
+        if ids.isSubset(of: session.selected) { session.selected.subtract(ids) }
+        else { session.selected.formUnion(ids) }
+    }
+
     private var summary: some View {
         HStack(alignment: .center, spacing: 28) {
             CountUpMetric(value: ByteCountFormatter.string(fromByteCount: selectedBytes, countStyle: .file), label: "Selected")
-            CountUpMetric(value: "\(selected.count)/\(items.count)", label: "Items")
+            CountUpMetric(value: "\(session.selected.count)/\(session.items.count)", label: "Items")
             Spacer()
             Button("Move to Trash") { showConfirm = true }
                 .buttonStyle(PrimaryButtonStyle())
-                .disabled(selected.isEmpty)
-                .opacity(selected.isEmpty ? 0.5 : 1)
+                .disabled(session.selected.isEmpty)
+                .opacity(session.selected.isEmpty ? 0.5 : 1)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -341,18 +417,22 @@ struct ScanView: View {
     // MARK: Actions
 
     private func toggle(_ item: ScannedItem) {
-        if selected.contains(item.id) { selected.remove(item.id) } else { selected.insert(item.id) }
+        if session.selected.contains(item.id) { session.selected.remove(item.id) }
+        else { session.selected.insert(item.id) }
     }
 
     private func startScan() {
-        scanTask?.cancel()
-        filter = ""; selected = []; trashErrors = [:]
+        session.scanTask?.cancel()
+        session.filter = ""; session.selected = []; session.trashErrors = [:]
         setPhase(.scanning)
-        scanTask = Task { @MainActor in
+        // The Task captures the app-scoped session (a class), so a scan finishing
+        // after the user switched tabs still lands its results — nothing is lost
+        // to a destroyed view.
+        session.scanTask = Task { @MainActor [session] in
             // Real read-only scan off the main thread (sizing can take a moment).
             // Each category dispatches to its own engine; Quick/Deep genuinely
             // change engine behavior — never just a different sleep.
-            let scanMode: SafeDeleteEngine.ScanMode = (mode == .deep) ? .deep : .quick
+            let scanMode: SafeDeleteEngine.ScanMode = (session.mode == .deep) ? .deep : .quick
             let cat = category
             // Cancellation must be propagated by hand into the detached task
             // (the engines poll Task.isCancelled), so Cancel stops the disk
@@ -371,14 +451,14 @@ struct ScanView: View {
                 walk.cancel()
             }
             guard !Task.isCancelled else { return }
-            items = found
+            session.items = found
             // Pre-select the .safe items; leave .caution for the user to opt into.
-            selected = Set(found.filter { $0.risk == .safe }.map(\.id))
+            session.selected = Set(found.filter { $0.risk == .safe }.map(\.id))
             setPhase(found.isEmpty ? .empty : .results)
             if !found.isEmpty {
                 let size = ByteCountFormatter.string(fromByteCount: found.reduce(0) { $0 + $1.bytes }, countStyle: .file)
-                toastStyle = .success
-                toast = "Found \(size) across \(found.count) item\(found.count == 1 ? "" : "s") — read-only until you confirm"
+                session.toastStyle = .success
+                session.toast = "Found \(size) across \(found.count) item\(found.count == 1 ? "" : "s") — read-only until you confirm"
             }
         }
     }
@@ -400,24 +480,62 @@ struct ScanView: View {
             // Surface every refusal on its (still-listed) row — the engine's
             // doc contract: refusal reasons are never silently swallowed.
             for (item, outcome) in zip(chosen, outcomes) where !outcome.success {
-                trashErrors[item.id] = outcome.error ?? "Could not move to Trash"
+                session.trashErrors[item.id] = outcome.error ?? "Could not move to Trash"
             }
 
-            if reduceMotion { items.removeAll { trashedIDs.contains($0.id) } }
-            else { withAnimation(Theme.spring) { items.removeAll { trashedIDs.contains($0.id) } } }
-            selected.subtract(trashedIDs)
+            if reduceMotion { session.items.removeAll { trashedIDs.contains($0.id) } }
+            else { withAnimation(Theme.spring) { session.items.removeAll { trashedIDs.contains($0.id) } } }
+            session.selected.subtract(trashedIDs)
 
             let sizeStr = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
             let refused = outcomes.count - succeeded.count
-            toastStyle = refused > 0 ? .warning : .success
-            toast = "Moved \(succeeded.count) to Trash · \(sizeStr) reclaimed" + (refused > 0 ? " · \(refused) refused" : "")
-            if items.isEmpty { setPhase(.empty) }
+            session.toastStyle = refused > 0 ? .warning : .success
+            session.toast = "Moved \(succeeded.count) to Trash · \(sizeStr) reclaimed" + (refused > 0 ? " · \(refused) refused" : "")
+            if session.items.isEmpty { setPhase(.empty) }
         }
     }
 
     private func setPhase(_ newPhase: Phase) {
-        if reduceMotion { phase = newPhase }
-        else { withAnimation(Theme.spring) { phase = newPhase } }
+        if reduceMotion { session.phase = newPhase }
+        else { withAnimation(Theme.spring) { session.phase = newPhase } }
+    }
+}
+
+// MARK: - Orphan group header
+
+/// One inferred former app in the orphan list — title from the vendor prefix,
+/// raw prefix shown alongside so the inference stays auditable. The checkbox
+/// selects/deselects every leftover in the group.
+private struct OrphanGroupHeader: View {
+    let owner: String          // vendor prefix, e.g. "com.spotify"
+    let items: [ScannedItem]
+    let selectedCount: Int
+    let onToggleAll: () -> Void
+
+    private var bytes: Int64 { items.reduce(0) { $0 + $1.bytes } }
+    private var title: String { UninstallEngine.vendorDisplayName(owner) }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggleAll) {
+                Image(systemName: selectedCount == items.count ? "checkmark.circle.fill"
+                                  : selectedCount > 0 ? "minus.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selectedCount > 0 ? Theme.primary : Theme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(selectedCount == items.count ? "Deselect" : "Select") all \(title) leftovers")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
+                Text("\(owner).* — app no longer installed")
+                    .font(Typo.mono).foregroundStyle(Theme.textTertiary)
+            }
+            Spacer()
+            Text("\(items.count) file\(items.count == 1 ? "" : "s") · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 10)
     }
 }
 

@@ -19,6 +19,9 @@ struct ScannedItem: Identifiable, Hashable {
     let bytes: Int64
     let risk: CleanRisk
     let detail: String
+    /// Vendor prefix ("com.spotify") of the app this item belonged to, when a
+    /// scan can infer one (orphan scan). Lets the UI group leftovers per app.
+    var ownerApp: String? = nil
 
     var sizeText: String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 
@@ -35,6 +38,7 @@ enum SafetyVerdict: Equatable {
     case blockedSystemPath   // under a SIP/system root — never touch
     case blockedOutsideHome  // outside the user's home directory
     case blockedMissing      // nothing there to delete
+    case blockedNeedsAdmin   // root-owned (App Store/installer) — macOS requires admin auth
 
     var isAllowed: Bool { self == .allowed }
 }
@@ -83,6 +87,17 @@ enum SafeDeleteEngine {
         return path.components(separatedBy: "/").count == 3
     }
 
+    /// App Store apps (and anything installed by a root installer) are owned by
+    /// root — a user-level trashItem is refused by macOS with an opaque error.
+    /// Cleanitup never escalates privileges, so it refuses upfront with a clear
+    /// reason instead. Unreadable attributes fall through to the OS refusal at
+    /// trash time (still surfaced, never swallowed).
+    static func ownedByAnotherUser(_ path: String) -> Bool {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let owner = attrs[.ownerAccountID] as? NSNumber else { return false }
+        return owner.uint32Value != getuid()
+    }
+
     /// A path is allowed ONLY if it lives inside the user's home directory and is
     /// not under any blocked system root. Symlinks are resolved first so a link
     /// can't smuggle a system path past the check. Sole documented exception:
@@ -93,7 +108,8 @@ enum SafeDeleteEngine {
             .resolvingSymlinksInPath().standardizedFileURL.path
 
         if isUserUninstallableAppBundle(path) {
-            return FileManager.default.fileExists(atPath: path) ? .allowed : .blockedMissing
+            guard FileManager.default.fileExists(atPath: path) else { return .blockedMissing }
+            return ownedByAnotherUser(path) ? .blockedNeedsAdmin : .allowed
         }
 
         for root in blockedRoots where path == root || path.hasPrefix(root + "/") {
@@ -111,8 +127,10 @@ enum SafeDeleteEngine {
 
     /// True for the permission-denial shapes macOS actually throws: Cocoa 257
     /// (NSFileReadNoPermissionError, what TCC denials surface as) or a POSIX
-    /// EPERM/EACCES (possibly wrapped as the underlying error).
-    private static func isPermissionError(_ error: Error) -> Bool {
+    /// EPERM/EACCES (possibly wrapped as the underlying error). Also reused by
+    /// PermissionGateView's one-time probe so denial classification is
+    /// identical everywhere.
+    static func isPermissionError(_ error: Error) -> Bool {
         let ns = error as NSError
         if ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoPermissionError { return true } // 257
         let posix = (ns.userInfo[NSUnderlyingErrorKey] as? NSError) ?? ns
@@ -240,8 +258,10 @@ enum SafeDeleteEngine {
     private static func trashWithoutJournal(_ url: URL) -> TrashOutcome {
         let v = verdict(for: url)
         guard v.isAllowed else {
-            return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
-                                error: "Refused (\(v)) — outside the safe zone")
+            let reason = v == .blockedNeedsAdmin
+                ? "Owned by macOS (root) — removing it needs admin authorization, and Cleanitup never escalates privileges. Use Launchpad or Finder."
+                : "Refused (\(v)) — outside the safe zone"
+            return TrashOutcome(url: url, success: false, reclaimedBytes: 0, error: reason)
         }
         let reclaimed = size(of: url)
         do {
