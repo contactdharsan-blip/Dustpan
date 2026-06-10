@@ -340,9 +340,17 @@ struct ScanView: View {
                 // adding bounded read-only discovery. The switcher genuinely changes
                 // engine behavior — never just a different sleep.
                 let scanMode: SafeDeleteEngine.ScanMode = (mode == .deep) ? .deep : .quick
-                found = await Task.detached(priority: .userInitiated) {
+                // Cancellation must be propagated by hand into the detached task
+                // (the engine polls Task.isCancelled), so Cancel stops the disk
+                // walk itself — not just the UI while I/O burns on in the background.
+                let walk = Task.detached(priority: .userInitiated) {
                     SafeDeleteEngine.scanReclaimable(mode: scanMode)
-                }.value
+                }
+                found = await withTaskCancellationHandler {
+                    await walk.value
+                } onCancel: {
+                    walk.cancel()
+                }
             } else {
                 try? await Task.sleep(nanoseconds: mode == .deep ? 1_200_000_000 : 800_000_000)
                 found = ScanView.demoItems(for: category, deep: mode == .deep)
