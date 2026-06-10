@@ -50,6 +50,8 @@ struct SystemDataView: View {
     @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
     /// nil = still listing; populated = the tmutil report (A3, report-only).
     @State private var snapshotReport: SnapshotReport?
+    /// nil = still measuring; populated = A5 Photos/Mail diagnostics (report-only).
+    @State private var diagnostics: [MediaDiagnostic]?
 
     private var snapshot: StatsSnapshot? { store.snapshot }
 
@@ -86,7 +88,9 @@ struct SystemDataView: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 reconciliationCard
+                purgeableCard
                 breakdownCard
+                diagnosticsCard
                 snapshotsCard
                 divergenceNote
                 Spacer(minLength: 0)
@@ -102,6 +106,11 @@ struct SystemDataView: View {
             if snapshotReport == nil {
                 snapshotReport = await Task.detached(priority: .utility) {
                     SnapshotEngine.listLocalSnapshots()
+                }.value
+            }
+            if diagnostics == nil {
+                diagnostics = await Task.detached(priority: .utility) {
+                    DiagnosticsEngine.photosMailDiagnostics()
                 }.value
             }
         }
@@ -159,6 +168,49 @@ struct SystemDataView: View {
                     SkeletonView(width: 120, height: 24)
                     SkeletonView(width: 120, height: 24)
                     SkeletonView(width: 120, height: 24)
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    // MARK: A2 — purgeable space, explained (report-only, live counter)
+
+    /// The #2 storage confusion after System Data: "free space" numbers that
+    /// disagree with each other. The card shows the live purgeable number (the
+    /// gap between the two kinds of free macOS reports), explains why it won't
+    /// shrink by hand, and offers a cheap re-check — measure again, don't trust.
+    private var purgeableCard: some View {
+        // Prefer the on-demand re-read over the (possibly older) snapshot totals.
+        let totals = store.liveTotals ?? snapshot?.disk
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Purgeable space, explained").typoLabel()
+                Spacer()
+                PillBadge(text: "report-only", tint: Theme.neutral)
+            }
+
+            if let totals {
+                HStack(alignment: .center, spacing: 28) {
+                    CountUpMetric(value: totals.purgeableText, label: "Purgeable right now")
+                    Spacer()
+                    Button("Re-check") { store.refreshDiskTotals() }
+                        .buttonStyle(GlassButtonStyle())
+                        .help("Re-reads the volume statistics — one cheap call, no rescan")
+                }
+                Text("macOS reports two kinds of free space: one that counts this purgeable pool as already free (what Finder shows) and a strict one that doesn't (what `df` shows). The gap is purgeable: local Time Machine snapshots, evictable caches, and iCloud files macOS can offload.")
+                    .font(.subheadline).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("You can't empty it by hand, and nothing here will pretend to. macOS frees it on its own the moment something needs the space; snapshots expire within ~24 hours. If a number refuses to shrink, this pool is usually why — re-check it after any big deletion and watch it move.")
+                    .font(.caption).foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // Volume keys unavailable or first paint — skeleton, never a guess.
+                VStack(alignment: .leading, spacing: 10) {
+                    SkeletonView(width: 140, height: 24)
+                    SkeletonView(height: 12)
                 }
             }
         }
@@ -269,6 +321,82 @@ struct SystemDataView: View {
             return "Categories sum past Used — APFS clones share disk blocks, so a remainder can't be computed honestly here."
         }
         return "Can't compute — some folders were unreadable without Full Disk Access, and their unknown size would hide inside this number."
+    }
+
+    // MARK: A5 — Photos & Mail, diagnosed (report-only)
+
+    /// The two libraries behind most "what is eating my disk" forum threads.
+    /// Measured honestly, explained, and pointed at the Apple-blessed fix —
+    /// never offered for cleaning (they're database-backed; see DiagnosticsEngine).
+    private var diagnosticsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Photos & Mail, diagnosed").typoLabel()
+                Spacer()
+                PillBadge(text: "report-only", tint: Theme.neutral)
+            }
+
+            if let diagnostics {
+                if diagnostics.isEmpty {
+                    Text("No Photos library or Mail store in the default locations on this Mac — nothing to diagnose.")
+                        .font(.subheadline).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 12) {
+                        ForEach(diagnostics) { diag in
+                            diagnosticRow(diag)
+                        }
+                    }
+                    Text("These are macOS-managed stores — deleting files inside them corrupts their databases, so Cleanitup measures and explains but will never offer to clean them.")
+                        .font(.caption).foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        HStack(spacing: 12) {
+                            SkeletonView(width: 14, height: 14, cornerRadius: Theme.radiusSm)
+                            SkeletonView(width: 180, height: 12)
+                            Spacer()
+                            SkeletonView(width: 64, height: 12)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private func diagnosticRow(_ diag: MediaDiagnostic) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Image(systemName: diag.systemImage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 18)
+                Text(diag.name)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                if diag.report.rootDenied { PermissionBadgeButton() }
+                Spacer(minLength: 8)
+                Text(diag.sizeText)
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(Theme.textPrimary)
+                    .frame(minWidth: 70, alignment: .trailing)
+            }
+            Text(diag.explanation)
+                .font(.caption).foregroundStyle(Theme.textTertiary)
+                .padding(.leading, 30)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("The fix Apple supports: \(diag.blessedFix)")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+                .padding(.leading, 30)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: A3 — local Time Machine snapshots (report-only)

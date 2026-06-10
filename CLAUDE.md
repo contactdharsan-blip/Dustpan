@@ -88,7 +88,40 @@ Apply these on every task, before and while writing code.
 ```sh
 # build (also the typecheck)
 xcodebuild -project Cleanitup.xcodeproj -scheme Cleanitup -configuration Debug build
+
+# empirical engine harness (the test suite until XCTest exists): engines are
+# Foundation-only, so compile them with a main.swift of assertions and run it
+swiftc -o /tmp/t/run Cleanitup/<Engine>.swift Cleanitup/SafeDeleteEngine.swift \
+  Cleanitup/UndoJournal.swift /tmp/t/main.swift && /tmp/t/run
+# note: TCC-gated paths (Photos, Mail, Desktop…) read as DENIED from a bare
+# harness binary — that's the honest-path behavior, not a bug
+
+# verify a running build (kill stale instances first)
+pkill -x Cleanitup
 ```
+
+## Architecture
+
+Two strict layers, one rule: **every number is a real measurement or an em-dash.**
+
+- **Engines** (Foundation-only, no SwiftUI, harness-testable): `SafeDeleteEngine`
+  (verdict() safety gate, honest SizeReport with —/≥ denial semantics, Trash-only
+  deletion, reclaimable-location scan), `StatsEngine` (20 disjoint disk categories,
+  frozen AsyncStream snapshot contract — see its header), `UninstallEngine`
+  (apps + leftovers + orphans), `LargeFileEngine`, `ClutterEngine` (installers/
+  screenshots, age-sorted), `SnapshotEngine` (tmutil, report-only),
+  `DiagnosticsEngine` (Photos/Mail, report-only), `UndoJournal` (JSONL audit log;
+  every trash attempt recorded at engine level — call sites can't forget).
+- **Views** are presentation-only: they consume app-scoped `@Observable` stores/
+  sessions owned by ContentView (`StatsStore`, `ScanSession`, `UninstallSession` —
+  scans survive sidebar switches) and only reach engines via `Task.detached`
+  read-only report calls. One measurement run feeds Overview, System Data, and
+  Disk Map — never a second scan.
+- **Safety invariants** (don't weaken): all deletion via `SafeDeleteEngine
+  .moveToTrash` behind `verdict()` (home-only + one documented /Applications
+  uninstall carve-out); denied roots render "—" + permission affordance, never 0;
+  `.caution` items are never pre-selected; report-only surfaces (Trash, snapshots,
+  Photos/Mail) offer no delete button at all.
 
 ---
 

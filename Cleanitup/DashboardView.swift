@@ -9,17 +9,28 @@ import Observation
     var snapshot: StatsSnapshot?
     /// When the last run finished (`isComplete`); drives the "measured HH:mm" pill.
     var completedAt: Date?
+    /// A2 — disk totals re-read on demand (one cheap volume-stats call, not a
+    /// re-walk). Lets the purgeable counter update live after any action while
+    /// the engine-call boundary stays in the store, not the views.
+    var liveTotals: DiskTotals?
     @ObservationIgnored private var task: Task<Void, Never>?
 
     func refresh() {
         task?.cancel()
         snapshot = nil
         completedAt = nil
+        liveTotals = nil
         task = Task {
             for await snap in StatsEngine.live() {
                 snapshot = snap
                 if snap.isComplete { completedAt = .now }
             }
+        }
+    }
+
+    func refreshDiskTotals() {
+        Task {
+            liveTotals = await Task.detached(priority: .utility) { StatsEngine.diskTotals() }.value
         }
     }
 }
