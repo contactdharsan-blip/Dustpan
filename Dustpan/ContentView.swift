@@ -86,6 +86,7 @@ enum SidebarItem: Hashable, Identifiable {
     case systemData
     case diskMap
     case category(CleanupCategory)
+    case loginItems
     case history
 
     var id: String {
@@ -94,6 +95,7 @@ enum SidebarItem: Hashable, Identifiable {
         case .systemData: return "system-data"
         case .diskMap: return "disk-map"
         case .category(let c): return c.id
+        case .loginItems: return "login-items"
         case .history: return "history"
         }
     }
@@ -131,6 +133,9 @@ struct ContentView: View {
                         .badge(category.milestone)
                         .tag(SidebarItem.category(category))
                 }
+                Label("Login Items", systemImage: "power")
+                    .badge("report-only")
+                    .tag(SidebarItem.loginItems)
                 Label("History", systemImage: "clock.arrow.circlepath")
                     .badge("audit")
                     .tag(SidebarItem.history)
@@ -159,6 +164,8 @@ struct ContentView: View {
                     // Force-unwrap is total by construction: the dictionary is
                     // initialized over CleanupCategory.allCases.
                     ScanView(category: category, session: scanSessions[category]!).id(category)
+                case .loginItems:
+                    LoginItemsView().id(SidebarItem.loginItems)
                 case .history:
                     HistoryView().id(SidebarItem.history)
                 case nil:

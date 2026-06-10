@@ -238,7 +238,8 @@ enum UninstallEngine {
     }
 
     /// First two reverse-DNS components: "com.spotify.client" → "com.spotify".
-    private static func vendorPrefix(of bundleID: String) -> String {
+    /// Internal: LoginItemsEngine reuses it to match launchd labels to vendors.
+    static func vendorPrefix(of bundleID: String) -> String {
         bundleID.split(separator: ".").prefix(2).joined(separator: ".")
     }
 
