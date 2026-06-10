@@ -45,6 +45,9 @@ import Observation
 /// them (the synchronized file group would otherwise duplicate-symbol).
 struct DashboardView: View {
     let store: StatsStore
+    /// Sidebar navigation hook (ContentView owns the selection). Lets the
+    /// ReclaimableCard CTA jump straight to the surface that can act.
+    var navigate: ((SidebarItem) -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
 
@@ -57,7 +60,7 @@ struct DashboardView: View {
                 ScoreCard(snapshot: snapshot, reduceMotion: reduceMotion)
                 KPIGrid(snapshot: snapshot)
                 BreakdownCard(snapshot: snapshot, reduceMotion: reduceMotion)
-                ReclaimableCard(snapshot: snapshot)
+                ReclaimableCard(snapshot: snapshot, navigate: navigate)
                 NotMeasuredNote()
                 Spacer(minLength: 0)
             }
@@ -526,6 +529,7 @@ struct PermissionBadgeButton: View {
 /// when nothing is reclaimable it says so plainly — no manufactured urgency.
 private struct ReclaimableCard: View {
     let snapshot: StatsSnapshot?
+    var navigate: ((SidebarItem) -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -549,6 +553,13 @@ private struct ReclaimableCard: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let navigate {
+                        Button("Review in Developer Caches") {
+                            navigate(.category(.developerCaches))
+                        }
+                        .buttonStyle(GlassButtonStyle())
+                        .accessibilityHint("Opens the Developer Caches scan where you can review and trash these items")
+                    }
                 } else {
                     Text("Nothing reclaimable in the known locations the quick scan checks. Your caches are already tidy.")
                         .font(.subheadline)

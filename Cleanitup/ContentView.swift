@@ -128,7 +128,8 @@ struct ContentView: View {
                 AmbientBackground()
                 switch selection {
                 case .overview:
-                    DashboardView(store: store).id(SidebarItem.overview)
+                    DashboardView(store: store, navigate: { selection = $0 })
+                        .id(SidebarItem.overview)
                 case .systemData:
                     // Shares the app-scoped measurement — never a second scan.
                     SystemDataView(store: store).id(SidebarItem.systemData)
