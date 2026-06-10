@@ -73,6 +73,7 @@ extension CleanRisk {
 enum SidebarItem: Hashable, Identifiable {
     case overview
     case systemData
+    case diskMap
     case category(CleanupCategory)
     case history
 
@@ -80,6 +81,7 @@ enum SidebarItem: Hashable, Identifiable {
         switch self {
         case .overview: return "overview"
         case .systemData: return "system-data"
+        case .diskMap: return "disk-map"
         case .category(let c): return c.id
         case .history: return "history"
         }
@@ -110,6 +112,9 @@ struct ContentView: View {
                 Label("System Data", systemImage: "questionmark.folder")
                     .badge("explained")
                     .tag(SidebarItem.systemData)
+                Label("Disk Map", systemImage: "rectangle.split.3x3")
+                    .badge("treemap")
+                    .tag(SidebarItem.diskMap)
                 ForEach(CleanupCategory.allCases) { category in
                     Label(category.rawValue, systemImage: category.systemImage)
                         .badge(category.milestone)
@@ -133,6 +138,9 @@ struct ContentView: View {
                 case .systemData:
                     // Shares the app-scoped measurement — never a second scan.
                     SystemDataView(store: store).id(SidebarItem.systemData)
+                case .diskMap:
+                    TreemapView(store: store, navigate: { selection = $0 })
+                        .id(SidebarItem.diskMap)
                 case .category(.appUninstaller):
                     // Pick-an-app flow — a different shape from scan-everything.
                     UninstallView(session: uninstallSession).id(SidebarItem.category(.appUninstaller))

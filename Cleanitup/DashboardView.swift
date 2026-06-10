@@ -289,19 +289,11 @@ private struct BreakdownCard: View {
     let snapshot: StatsSnapshot?
     let reduceMotion: Bool
 
-    /// A stable color ramp for the segments (reused by bar + legend).
-    private let palette: [Color] = [
-        Theme.primary, Theme.secondary, Theme.primaryLight,
-        Theme.primaryDark, Theme.warning,
-    ]
-    /// 5 base colors over ~20 rows would repeat exactly — each palette cycle
-    /// steps the opacity down so every row/segment pair stays visually unique.
-    /// ONE helper used by both the bar and the legend so they always match.
-    private func color(for index: Int) -> Color {
-        palette[index % palette.count].opacity(1.0 - 0.18 * Double(index / palette.count))
-    }
+    /// ONE shared ramp (CategoryPalette) for bar, legend, AND the Disk Map —
+    /// a category keeps the same color on every surface.
+    private func color(for index: Int) -> Color { CategoryPalette.color(for: index) }
     /// The remainder gets the neutral tint — it's "everything else", not an alarm.
-    private let remainderTint = Theme.neutral
+    private let remainderTint = CategoryPalette.remainder
 
     private var used: Int64 { snapshot?.disk?.used ?? 0 }
 
