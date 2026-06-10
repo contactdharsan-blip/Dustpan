@@ -11,6 +11,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     case appUninstaller = "App Uninstaller"
     case orphanScan = "Orphaned Files"
     case largeFiles = "Large Files"
+    case clutter = "Installers & Screenshots"
     case developerCaches = "Developer Caches"
 
     var id: String { rawValue }
@@ -20,27 +21,30 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         case .appUninstaller: return "trash"
         case .orphanScan: return "doc.badge.gearshape"
         case .largeFiles: return "externaldrive.badge.minus"
+        case .clutter: return "camera.on.rectangle"
         case .developerCaches: return "hammer"
         }
     }
 
     var milestone: String {
         switch self {
-        case .appUninstaller, .orphanScan, .largeFiles: return "v1.0 · live"
+        case .appUninstaller, .orphanScan, .largeFiles, .clutter: return "v1.0 · live"
         case .developerCaches: return "v1.1 · live"
         }
     }
 
     /// True when the category offers genuinely different Quick/Deep behavior.
-    /// Orphan scanning has exactly one honest mode, so it shows no switcher —
-    /// two modes that secretly do the same thing would be a placebo control.
-    var supportsModes: Bool { self != .orphanScan }
+    /// Orphan and clutter scans have exactly one honest mode, so they show no
+    /// switcher — two modes that secretly do the same thing would be a placebo
+    /// control.
+    var supportsModes: Bool { self != .orphanScan && self != .clutter }
 
     var quickCaption: String {
         switch self {
         case .developerCaches: return "Checks known reclaimable locations only — fast."
         case .largeFiles: return "Files ≥ 100 MB in Downloads, Desktop, Documents, Movies, and Music."
         case .orphanScan: return "Scans ~/Library for files whose owning app is no longer installed. Everything found is Caution — verify before trashing."
+        case .clutter: return "Installer images in Downloads, plus screenshots and screen recordings on Desktop and in Downloads. Oldest first — age is the signal. Everything is Caution: your files, your call."
         case .appUninstaller: return ""
         }
     }
@@ -49,7 +53,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         switch self {
         case .developerCaches: return "Everything in Quick, plus a read-only search of your folders for large caches, simulator devices, old archives, and node_modules. Slower."
         case .largeFiles: return "Files ≥ 100 MB across your whole home folder (except ~/Library — other categories own it). Photos/Music libraries and app bundles are skipped: macOS manages those. Slower."
-        case .orphanScan, .appUninstaller: return ""
+        case .orphanScan, .clutter, .appUninstaller: return ""
         }
     }
 
@@ -58,6 +62,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         case .appUninstaller: return "Remove an app and every leftover file it left in ~/Library."
         case .orphanScan: return "Find files left behind by apps you already deleted."
         case .largeFiles: return "Surface your biggest files — you decide what moves to Trash."
+        case .clutter: return "Old installers and screenshots, oldest first — the stale stuff is obvious."
         case .developerCaches: return "Reclaim Xcode, simulator, and package-manager caches over known-safe paths."
         }
     }
@@ -372,7 +377,9 @@ struct ScanView: View {
             reduceMotion: reduceMotion,
             onToggle: { toggle(item) },
             onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) },
-            onPreview: category == .largeFiles ? { quickLookURL = item.url } : nil
+            // Quick Look where it answers "what IS this file" — large files and
+            // clutter (screenshots/installers are exactly what it's for).
+            onPreview: (category == .largeFiles || category == .clutter) ? { quickLookURL = item.url } : nil
         )
     }
 
@@ -451,6 +458,7 @@ struct ScanView: View {
                 case .developerCaches: return SafeDeleteEngine.scanReclaimable(mode: scanMode)
                 case .orphanScan: return UninstallEngine.scanOrphans()
                 case .largeFiles: return LargeFileEngine.scan(mode: scanMode)
+                case .clutter: return ClutterEngine.scan()
                 case .appUninstaller: return [] // routed to UninstallView, never here
                 }
             }
