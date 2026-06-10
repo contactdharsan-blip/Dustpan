@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Cleanitup's design language — a SwiftUI translation of Biopath's
+/// Dustpan's design language — a SwiftUI translation of Biopath's
 /// "Dark Liquid-Glass" system (DESIGN.md): near-black canvas, one themeable
 /// emerald→teal accent, frosted glass surfaces, ambient glow, spring-overshoot
 /// motion. Web tokens (CSS vars / Tailwind) map to native equivalents here.

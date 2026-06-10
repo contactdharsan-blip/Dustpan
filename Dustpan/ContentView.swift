@@ -129,7 +129,7 @@ struct ContentView: View {
                     .badge("audit")
                     .tag(SidebarItem.history)
             }
-            .navigationTitle("Cleanitup")
+            .navigationTitle("Dustpan")
             .scrollContentBackground(.hidden)
             .background(Theme.bgSecondary.opacity(0.5))
             .frame(minWidth: 230)

@@ -1,11 +1,11 @@
-# Cleanitup
+# Dustpan
 
 **A free, open-source, transparent macOS storage cleaner.**
 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
 ![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)
 
-Cleanitup shows you every file before it touches anything, moves things to the
+Dustpan shows you every file before it touches anything, moves things to the
 Trash (never `rm`), and only cleans what genuinely reclaims space — app
 leftovers, large files, and developer caches. No subscription, no upsell, no
 telemetry, and you can read every line that touches your disk.
@@ -29,7 +29,7 @@ stale, and BleachBit's Mac build is command-line only.
 
 A cleaner needs **Full Disk Access** — the same permission profile as malware. The
 only honest way to earn that is to let anyone read exactly what the tool deletes.
-That is the entire point of Cleanitup. See [`PRD.md`](PRD.md) for the full product
+That is the entire point of Dustpan. See [`PRD.md`](PRD.md) for the full product
 rationale and competitive analysis.
 
 ## Safe by default
@@ -45,9 +45,9 @@ rationale and competitive analysis.
 **Requirements:** macOS 14 (Sonoma) or later, and [Xcode](https://developer.apple.com/xcode/) 16 or later.
 
 ```sh
-git clone https://github.com/contactdharsan-blip/Cleanitup.git
-cd Cleanitup
-open Cleanitup.xcodeproj
+git clone https://github.com/contactdharsan-blip/Dustpan.git
+cd Dustpan
+open Dustpan.xcodeproj
 ```
 
 Then press **▶ Run** (⌘R) in Xcode. The app is configured to sign locally
@@ -56,7 +56,7 @@ Then press **▶ Run** (⌘R) in Xcode. The app is configured to sign locally
 Prefer the command line?
 
 ```sh
-xcodebuild -scheme Cleanitup -configuration Debug build
+xcodebuild -scheme Dustpan -configuration Debug build
 ```
 
 ## Roadmap
@@ -73,16 +73,16 @@ the Mac App Store, because Full Disk Access is incompatible with the App Sandbox
 ## Project layout
 
 ```
-Cleanitup.xcodeproj       # Xcode project (file-system-synchronized groups)
-Cleanitup/                # app sources
-  CleanitupApp.swift       # @main entry point
+Dustpan.xcodeproj       # Xcode project (file-system-synchronized groups)
+Dustpan/                # app sources
+  DustpanApp.swift       # @main entry point
   ContentView.swift        # sidebar + scan flow (preview → confirm → Trash)
   DashboardView.swift      # storage Overview (live measurements, honest "—"s)
   StatsEngine.swift        # 20 disjoint disk categories, progressive snapshots
   SafeDeleteEngine.swift   # safety gate, sizing, scans, Trash-only deletion
   DesignSystem.swift       # theme tokens + glass-card styling
   Components/              # reusable UI (buttons, mode switcher, feedback kit)
-  Cleanitup.entitlements   # intentionally NOT sandboxed (needs Full Disk Access)
+  Dustpan.entitlements   # intentionally NOT sandboxed (needs Full Disk Access)
   Assets.xcassets/
 PRD.md                    # product requirements & competitive research
 ```
@@ -92,7 +92,7 @@ won't exist in a clone.)
 
 ## Contributing
 
-Cleanitup is built to survive single-maintainer abandonment — the failure mode that
+Dustpan is built to survive single-maintainer abandonment — the failure mode that
 killed the tools it replaces. Cleaning rules will live in community-editable manifests
 so contributors can keep paths current as macOS shifts them each release. Issues and
 PRs welcome.

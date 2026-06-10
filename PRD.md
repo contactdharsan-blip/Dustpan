@@ -1,4 +1,4 @@
-# PRD — Cleanitup (working name)
+# PRD — Dustpan (formerly working-named Cleanitup; D3 resolved 2026-06-11)
 
 **A free, open-source, transparent macOS storage cleaner.**
 It shows you every file before it touches anything, moves to Trash (never `rm`), and only

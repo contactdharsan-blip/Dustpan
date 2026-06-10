@@ -131,7 +131,7 @@ struct PermissionGateView: View {
                     .font(Typo.h3)
                     .foregroundStyle(Theme.textPrimary)
             }
-            Text("Cleanitup asks for everything once, up front — never mid-scan, and never again after this.")
+            Text("Dustpan asks for everything once, up front — never mid-scan, and never again after this.")
                 .font(.callout)
                 .foregroundStyle(Theme.textSecondary)
         }
@@ -140,7 +140,7 @@ struct PermissionGateView: View {
     private var folderCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Folder access").typoLabel()
-            Text("macOS protects Desktop, Documents and Downloads. Cleanitup only reads folder sizes — nothing is opened, changed, or sent anywhere. You'll see one system dialog per folder.")
+            Text("macOS protects Desktop, Documents and Downloads. Dustpan only reads folder sizes — nothing is opened, changed, or sent anywhere. You'll see one system dialog per folder.")
                 .font(.callout)
                 .foregroundStyle(Theme.textSecondary)
             ForEach(folders) { folder in
@@ -182,7 +182,7 @@ struct PermissionGateView: View {
                 case .unknown, nil: PillBadge(text: "—", tint: Theme.neutral)
                 }
             }
-            Text("Exact numbers for some ~/Library folders (Mail, Messages, Safari) need Full Disk Access. macOS has no dialog for this — it's a toggle in System Settings. Without it those folders honestly read \"≥\" or \"—\". After granting, relaunch Cleanitup.")
+            Text("Exact numbers for some ~/Library folders (Mail, Messages, Safari) need Full Disk Access. macOS has no dialog for this — it's a toggle in System Settings. Without it those folders honestly read \"≥\" or \"—\". After granting, relaunch Dustpan.")
                 .font(.callout)
                 .foregroundStyle(Theme.textSecondary)
             Button("Open System Settings", action: PermissionBadgeButton.openFullDiskAccessSettings)
@@ -203,7 +203,7 @@ struct PermissionGateView: View {
                     .foregroundStyle(Theme.textTertiary)
                     .help("Skipping starts the scan as-is — macOS may then ask per folder near the end of the first measurement.")
             }
-            Text("This is the only time Cleanitup asks. Whatever you decide here, the app won't prompt you again.")
+            Text("This is the only time Dustpan asks. Whatever you decide here, the app won't prompt you again.")
                 .font(.caption)
                 .foregroundStyle(Theme.textTertiary)
         }
