@@ -47,6 +47,8 @@ private let systemDataSide: [String: SystemDataInfo] = [
 
 struct SystemDataView: View {
     let store: StatsStore
+    /// nil = still listing; populated = the tmutil report (A3, report-only).
+    @State private var snapshotReport: SnapshotReport?
 
     private var snapshot: StatsSnapshot? { store.snapshot }
 
@@ -84,6 +86,7 @@ struct SystemDataView: View {
                 header
                 reconciliationCard
                 breakdownCard
+                snapshotsCard
                 divergenceNote
                 Spacer(minLength: 0)
             }
@@ -94,6 +97,11 @@ struct SystemDataView: View {
         // measurement; only start one if nothing has ever run.
         .task {
             if store.snapshot == nil { store.refresh() }
+            if snapshotReport == nil {
+                snapshotReport = await Task.detached(priority: .utility) {
+                    SnapshotEngine.listLocalSnapshots()
+                }.value
+            }
         }
     }
 
@@ -259,6 +267,60 @@ struct SystemDataView: View {
             return "Categories sum past Used — APFS clones share disk blocks, so a remainder can't be computed honestly here."
         }
         return "Can't compute — some folders were unreadable without Full Disk Access, and their unknown size would hide inside this number."
+    }
+
+    // MARK: A3 — local Time Machine snapshots (report-only)
+
+    private var snapshotsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Local Time Machine snapshots").typoLabel()
+                Spacer()
+                PillBadge(text: "report-only", tint: Theme.neutral)
+            }
+
+            if let report = snapshotReport {
+                if report.toolUnavailable {
+                    // tmutil failed — say so; an error is never an empty list.
+                    Text("Couldn't ask macOS about snapshots (tmutil unavailable or returned an error).")
+                        .font(.subheadline).foregroundStyle(Theme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if report.snapshots.isEmpty {
+                    Text("No local snapshots right now. macOS creates them hourly while Time Machine is on and deletes them automatically within about 24 hours — an empty list here is normal and healthy.")
+                        .font(.subheadline).foregroundStyle(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    VStack(spacing: 8) {
+                        ForEach(report.snapshots) { snap in
+                            HStack(spacing: 12) {
+                                Image(systemName: "clock.badge.checkmark")
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(Theme.textTertiary)
+                                    .frame(width: 18)
+                                Text(snap.dateText)
+                                    .font(.subheadline).foregroundStyle(Theme.textPrimary)
+                                Text(snap.ageText)
+                                    .font(.caption).foregroundStyle(Theme.textTertiary)
+                                Spacer(minLength: 8)
+                                // macOS exposes no per-snapshot size without
+                                // privileged APIs — em-dash, never a guess.
+                                Text("—")
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(Theme.textTertiary)
+                            }
+                        }
+                    }
+                    Text("Snapshot space reports as purgeable above — macOS reclaims it on demand and expires each snapshot within ~24 hours. Per-snapshot sizes need privileged APIs, so we show “—” rather than guess. Cleanitup doesn't delete snapshots today; that action isn't Trash-reversible.")
+                        .font(.caption).foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                SkeletonView(height: 14)
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
     }
 
     // MARK: Divergence disclosure (the D10 feature)
