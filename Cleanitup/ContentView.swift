@@ -71,12 +71,14 @@ extension CleanRisk {
 /// it directly while still letting `List(selection:)` drive the selection.
 enum SidebarItem: Hashable, Identifiable {
     case overview
+    case systemData
     case category(CleanupCategory)
     case history
 
     var id: String {
         switch self {
         case .overview: return "overview"
+        case .systemData: return "system-data"
         case .category(let c): return c.id
         case .history: return "history"
         }
@@ -97,6 +99,9 @@ struct ContentView: View {
                 Label("Overview", systemImage: "chart.pie")
                     .badge("live")
                     .tag(SidebarItem.overview)
+                Label("System Data", systemImage: "questionmark.folder")
+                    .badge("explained")
+                    .tag(SidebarItem.systemData)
                 ForEach(CleanupCategory.allCases) { category in
                     Label(category.rawValue, systemImage: category.systemImage)
                         .badge(category.milestone)
@@ -116,6 +121,9 @@ struct ContentView: View {
                 switch selection {
                 case .overview:
                     DashboardView(store: store).id(SidebarItem.overview)
+                case .systemData:
+                    // Shares the app-scoped measurement — never a second scan.
+                    SystemDataView(store: store).id(SidebarItem.systemData)
                 case .category(.appUninstaller):
                     // Pick-an-app flow — a different shape from scan-everything.
                     UninstallView().id(SidebarItem.category(.appUninstaller))
