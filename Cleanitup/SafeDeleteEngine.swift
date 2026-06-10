@@ -48,13 +48,20 @@ struct SizeReport: Equatable {
     var rootDenied: Bool = false
 }
 
-/// Result of attempting to Trash one item.
+/// Result of attempting to Trash one item. `trashedTo` is where the item landed
+/// inside the Trash — the undo journal's restore handle.
 struct TrashOutcome: Identifiable {
     let id = UUID()
     let url: URL
     let success: Bool
     let reclaimedBytes: Int64
     let error: String?
+    var trashedTo: URL? = nil
+}
+
+extension Array {
+    /// Bounds-checked subscript (used to pair optional name lists with URLs).
+    subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
 }
 
 enum SafeDeleteEngine {
@@ -65,13 +72,29 @@ enum SafeDeleteEngine {
 
     // MARK: Safety gate
 
+    /// The ONE exception to the home-only rule: a top-level `.app` bundle
+    /// directly inside /Applications, and only when the user explicitly chose to
+    /// uninstall it. Still Trash-only; SIP-protected Apple apps refuse at trash
+    /// time and that refusal is surfaced. Nested paths (anything *inside* a
+    /// bundle, or in a subfolder) stay blocked.
+    static func isUserUninstallableAppBundle(_ path: String) -> Bool {
+        guard path.hasPrefix("/Applications/"), path.hasSuffix(".app") else { return false }
+        // Exactly ["", "Applications", "Name.app"] — no deeper.
+        return path.components(separatedBy: "/").count == 3
+    }
+
     /// A path is allowed ONLY if it lives inside the user's home directory and is
     /// not under any blocked system root. Symlinks are resolved first so a link
-    /// can't smuggle a system path past the check.
+    /// can't smuggle a system path past the check. Sole documented exception:
+    /// `isUserUninstallableAppBundle` (explicit uninstall of a /Applications app).
     static func verdict(for url: URL) -> SafetyVerdict {
         let path = url.resolvingSymlinksInPath().standardizedFileURL.path
         let home = FileManager.default.homeDirectoryForCurrentUser
             .resolvingSymlinksInPath().standardizedFileURL.path
+
+        if isUserUninstallableAppBundle(path) {
+            return FileManager.default.fileExists(atPath: path) ? .allowed : .blockedMissing
+        }
 
         for root in blockedRoots where path == root || path.hasPrefix(root + "/") {
             // /private/var/folders is fine (temp), but we still require home-membership below,
@@ -191,9 +214,30 @@ enum SafeDeleteEngine {
 
     // MARK: Trash (the only destructive op — reversible)
 
-    /// Move one item to the Trash. Refuses unsafe paths; never permanently deletes.
+    /// Move one item to the Trash. Refuses unsafe paths; never permanently
+    /// deletes. EVERY attempt — success or refusal — is recorded in the undo
+    /// journal here at the engine level, so no call site can forget (C1).
     @discardableResult
-    static func moveToTrash(_ url: URL) -> TrashOutcome {
+    static func moveToTrash(_ url: URL, name: String? = nil, context: String = "Cleanup") -> TrashOutcome {
+        let outcome = trashWithoutJournal(url)
+        UndoJournal.record([UndoJournal.entry(for: outcome,
+                                              name: name ?? url.lastPathComponent,
+                                              context: context)])
+        return outcome
+    }
+
+    static func moveToTrash(_ urls: [URL], names: [String]? = nil, context: String = "Cleanup") -> [TrashOutcome] {
+        let outcomes = urls.map(trashWithoutJournal)
+        let entries = outcomes.enumerated().map { i, outcome in
+            UndoJournal.entry(for: outcome,
+                              name: names?[safe: i] ?? outcome.url.lastPathComponent,
+                              context: context)
+        }
+        UndoJournal.record(entries)
+        return outcomes
+    }
+
+    private static func trashWithoutJournal(_ url: URL) -> TrashOutcome {
         let v = verdict(for: url)
         guard v.isAllowed else {
             return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
@@ -201,15 +245,15 @@ enum SafeDeleteEngine {
         }
         let reclaimed = size(of: url)
         do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            return TrashOutcome(url: url, success: true, reclaimedBytes: reclaimed, error: nil)
+            var landedAt: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &landedAt)
+            return TrashOutcome(url: url, success: true, reclaimedBytes: reclaimed,
+                                error: nil, trashedTo: landedAt as URL?)
         } catch {
             return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
                                 error: error.localizedDescription)
         }
     }
-
-    static func moveToTrash(_ urls: [URL]) -> [TrashOutcome] { urls.map(moveToTrash) }
 
     // MARK: Real scan — reclaimable locations (read-only)
 
@@ -279,6 +323,15 @@ enum SafeDeleteEngine {
         "Homebrew", "Yarn", "pip", "CocoaPods", "org.swift.swiftpm",
         "ms-playwright", "ms-playwright-go", "deno", "go-build",
     ]
+
+    /// Absolute paths of every known reclaimable location. The orphan scan uses
+    /// this to EXCLUDE them: a known cache (often CLI-owned, e.g. SwiftPM) is
+    /// not an "orphan" — it has a better-labeled home in Developer Caches, and
+    /// listing it twice would double-count reclaimable bytes across categories.
+    static var knownReclaimablePaths: Set<String> {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return Set(quickSpecs.map { home.appendingPathComponent($0.relativePath).path })
+    }
 
     /// Scan reclaimable locations, read-only (discovers and measures, deletes
     /// nothing). Every returned URL is inside home, so `moveToTrash`'s verdict()
