@@ -150,6 +150,25 @@ enum Typo {
     static let mono = Font.system(.caption, design: .monospaced)
 }
 
+// MARK: - Storage-category palette
+
+/// Stable color ramp for storage-category visuals — the Overview stacked
+/// bar/legend AND the Disk Map tiles share it, so one category keeps one color
+/// on every surface. Index = the category's position in `snapshot.categories`.
+/// 5 base colors over ~20 rows would repeat exactly — each palette cycle steps
+/// the opacity down so every pairing stays visually unique.
+enum CategoryPalette {
+    static let base: [Color] = [
+        Theme.primary, Theme.secondary, Theme.primaryLight,
+        Theme.primaryDark, Theme.warning,
+    ]
+    static func color(for index: Int) -> Color {
+        base[index % base.count].opacity(1.0 - 0.18 * Double(index / base.count))
+    }
+    /// The honest remainder tint — it's "everything else", not an alarm.
+    static let remainder = Theme.neutral
+}
+
 /// §5.4 helper: the signature spring, or `nil` (instant) under Reduce Motion.
 /// Read `@Environment(\.accessibilityReduceMotion)` at the call site and pass it in.
 func motionSafeSpring(_ reduceMotion: Bool) -> Animation? {
