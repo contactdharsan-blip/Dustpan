@@ -17,9 +17,9 @@ struct InstalledApp: Identifiable, Hashable {
     let url: URL
     let lastUsed: Date?     // content access date of the bundle — a hint, not truth
     let isAppStore: Bool    // has Contents/_MASReceipt/receipt — installed by the App Store
-    /// Bundle owned by root (App Store / root installer): a user-level trash is
-    /// refused by macOS, and Cleanitup never escalates — so the bundle itself
-    /// can't be removed here, only its leftovers.
+    /// Bundle owned by root (App Store / root installer): trashing it is
+    /// delegated to Finder, which shows the macOS admin-authorization popup —
+    /// Cleanitup itself never holds elevated rights or sees the password.
     let needsAdminToDelete: Bool
 
     var isInUserApplications: Bool { url.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path) }
@@ -101,16 +101,16 @@ enum UninstallEngine {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var items: [ScannedItem] = []
 
-        // The bundle itself — Safe: the user explicitly chose this app. Skipped
-        // when root-owned (App Store / root installer): macOS refuses a user-level
-        // trash and Cleanitup never escalates, so offering the row would be a lie.
-        // The view explains and points to Launchpad/Finder; leftovers still listed.
-        if !app.needsAdminToDelete {
-            let bundleBytes = SafeDeleteEngine.size(of: app.url)
-            items.append(ScannedItem(
-                name: "\(app.name).app", url: app.url, bytes: bundleBytes, risk: .safe,
-                detail: "The application bundle itself." + provenance(of: app.url)))
-        }
+        // The bundle itself — Safe: the user explicitly chose this app. Root-owned
+        // bundles (App Store / root installer) are offered too: the engine
+        // delegates those to Finder, which asks for admin authorization in-app.
+        let bundleBytes = SafeDeleteEngine.size(of: app.url)
+        let adminNote = app.needsAdminToDelete
+            ? " macOS will ask for admin authorization when it moves to Trash."
+            : ""
+        items.append(ScannedItem(
+            name: "\(app.name).app", url: app.url, bytes: bundleBytes, risk: .safe,
+            detail: "The application bundle itself." + adminNote + provenance(of: app.url)))
 
         for root in leftoverRoots {
             if Task.isCancelled { break }

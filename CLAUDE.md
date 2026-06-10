@@ -119,7 +119,9 @@ Two strict layers, one rule: **every number is a real measurement or an em-dash.
   Disk Map — never a second scan.
 - **Safety invariants** (don't weaken): all deletion via `SafeDeleteEngine
   .moveToTrash` behind `verdict()` (home-only + one documented /Applications
-  uninstall carve-out); denied roots render "—" + permission affordance, never 0;
+  uninstall carve-out; root-owned bundles delegate to Finder via Apple Events,
+  which shows the macOS admin-auth popup — still Trash-only, the app itself
+  never holds elevated rights); denied roots render "—" + permission affordance, never 0;
   `.caution` items are never pre-selected; report-only surfaces (Trash, snapshots,
   Photos/Mail) offer no delete button at all.
 

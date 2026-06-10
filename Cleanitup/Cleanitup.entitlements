@@ -8,5 +8,10 @@
 	     Homebrew Cask) and not on the Mac App Store. See PRD.md §7. -->
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+	<!-- Apple Events to Finder only: root-owned /Applications bundles are
+	     trashed by Finder so macOS can show its admin-authorization popup
+	     in-app. Required under the hardened runtime for notarized builds. -->
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
 </dict>
 </plist>
