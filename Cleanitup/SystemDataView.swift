@@ -86,6 +86,7 @@ struct SystemDataView: View {
             VStack(alignment: .leading, spacing: 18) {
                 header
                 reconciliationCard
+                purgeableCard
                 breakdownCard
                 snapshotsCard
                 divergenceNote
@@ -159,6 +160,49 @@ struct SystemDataView: View {
                     SkeletonView(width: 120, height: 24)
                     SkeletonView(width: 120, height: 24)
                     SkeletonView(width: 120, height: 24)
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    // MARK: A2 — purgeable space, explained (report-only, live counter)
+
+    /// The #2 storage confusion after System Data: "free space" numbers that
+    /// disagree with each other. The card shows the live purgeable number (the
+    /// gap between the two kinds of free macOS reports), explains why it won't
+    /// shrink by hand, and offers a cheap re-check — measure again, don't trust.
+    private var purgeableCard: some View {
+        // Prefer the on-demand re-read over the (possibly older) snapshot totals.
+        let totals = store.liveTotals ?? snapshot?.disk
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Purgeable space, explained").typoLabel()
+                Spacer()
+                PillBadge(text: "report-only", tint: Theme.neutral)
+            }
+
+            if let totals {
+                HStack(alignment: .center, spacing: 28) {
+                    CountUpMetric(value: totals.purgeableText, label: "Purgeable right now")
+                    Spacer()
+                    Button("Re-check") { store.refreshDiskTotals() }
+                        .buttonStyle(GlassButtonStyle())
+                        .help("Re-reads the volume statistics — one cheap call, no rescan")
+                }
+                Text("macOS reports two kinds of free space: one that counts this purgeable pool as already free (what Finder shows) and a strict one that doesn't (what `df` shows). The gap is purgeable: local Time Machine snapshots, evictable caches, and iCloud files macOS can offload.")
+                    .font(.subheadline).foregroundStyle(Theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("You can't empty it by hand, and nothing here will pretend to. macOS frees it on its own the moment something needs the space; snapshots expire within ~24 hours. If a number refuses to shrink, this pool is usually why — re-check it after any big deletion and watch it move.")
+                    .font(.caption).foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                // Volume keys unavailable or first paint — skeleton, never a guess.
+                VStack(alignment: .leading, spacing: 10) {
+                    SkeletonView(width: 140, height: 24)
+                    SkeletonView(height: 12)
                 }
             }
         }
