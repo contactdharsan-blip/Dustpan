@@ -19,7 +19,7 @@ import SwiftUI
 /// plain-language story for the System-Data side.
 private struct SystemDataInfo {
     let what: String          // one line: what actually lives here
-    let actSurface: String?   // Cleanitup surface that can act, nil = macOS-managed
+    let actSurface: String?   // Dustpan surface that can act, nil = macOS-managed
 }
 
 /// StatsEngine category IDs that Apple's Storage pane lumps into "System Data"
@@ -275,7 +275,7 @@ struct SystemDataView: View {
                 }
             }
             if let info {
-                Text(info.what + (info.actSurface.map { " Act on it: \($0)." } ?? " macOS manages this — Cleanitup leaves it alone."))
+                Text(info.what + (info.actSurface.map { " Act on it: \($0)." } ?? " macOS manages this — Dustpan leaves it alone."))
                     .font(.caption)
                     .foregroundStyle(Theme.textTertiary)
                     .padding(.leading, 30)
@@ -347,7 +347,7 @@ struct SystemDataView: View {
                             diagnosticRow(diag)
                         }
                     }
-                    Text("These are macOS-managed stores — deleting files inside them corrupts their databases, so Cleanitup measures and explains but will never offer to clean them.")
+                    Text("These are macOS-managed stores — deleting files inside them corrupts their databases, so Dustpan measures and explains but will never offer to clean them.")
                         .font(.caption).foregroundStyle(Theme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -440,7 +440,7 @@ struct SystemDataView: View {
                             }
                         }
                     }
-                    Text("Snapshot space reports as purgeable above — macOS reclaims it on demand and expires each snapshot within ~24 hours. Per-snapshot sizes need privileged APIs, so we show “—” rather than guess. Cleanitup doesn't delete snapshots today; that action isn't Trash-reversible.")
+                    Text("Snapshot space reports as purgeable above — macOS reclaims it on demand and expires each snapshot within ~24 hours. Per-snapshot sizes need privileged APIs, so we show “—” rather than guess. Dustpan doesn't delete snapshots today; that action isn't Trash-reversible.")
                         .font(.caption).foregroundStyle(Theme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

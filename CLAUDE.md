@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`Cleanitup` — a free, open-source, trust-first macOS storage cleaner (SwiftUI, GPL-3.0,
+`Dustpan` — a free, open-source, trust-first macOS storage cleaner (SwiftUI, GPL-3.0,
 not sandboxed): real measurements or an em-dash, Trash-only deletion behind a safety gate.
 
 ---
@@ -87,17 +87,17 @@ Apply these on every task, before and while writing code.
 
 ```sh
 # build (also the typecheck)
-xcodebuild -project Cleanitup.xcodeproj -scheme Cleanitup -configuration Debug build
+xcodebuild -project Dustpan.xcodeproj -scheme Dustpan -configuration Debug build
 
 # empirical engine harness (the test suite until XCTest exists): engines are
 # Foundation-only, so compile them with a main.swift of assertions and run it
-swiftc -o /tmp/t/run Cleanitup/<Engine>.swift Cleanitup/SafeDeleteEngine.swift \
-  Cleanitup/UndoJournal.swift /tmp/t/main.swift && /tmp/t/run
+swiftc -o /tmp/t/run Dustpan/<Engine>.swift Dustpan/SafeDeleteEngine.swift \
+  Dustpan/UndoJournal.swift /tmp/t/main.swift && /tmp/t/run
 # note: TCC-gated paths (Photos, Mail, Desktop…) read as DENIED from a bare
 # harness binary — that's the honest-path behavior, not a bug
 
 # verify a running build (kill stale instances first)
-pkill -x Cleanitup
+pkill -x Dustpan
 ```
 
 ## Architecture

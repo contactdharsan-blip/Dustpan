@@ -19,7 +19,7 @@ struct InstalledApp: Identifiable, Hashable {
     let isAppStore: Bool    // has Contents/_MASReceipt/receipt — installed by the App Store
     /// Bundle owned by root (App Store / root installer): trashing it is
     /// delegated to Finder, which shows the macOS admin-authorization popup —
-    /// Cleanitup itself never holds elevated rights or sees the password.
+    /// Dustpan itself never holds elevated rights or sees the password.
     let needsAdminToDelete: Bool
 
     var isInUserApplications: Bool { url.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path) }

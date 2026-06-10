@@ -45,10 +45,10 @@ enum RestoreState: Equatable {
 
 enum UndoJournal {
 
-    /// ~/Library/Application Support/Cleanitup/history.jsonl — append-only.
+    /// ~/Library/Application Support/Dustpan/history.jsonl — append-only.
     static var journalURL: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Cleanitup", isDirectory: true)
+            .appendingPathComponent("Dustpan", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("history.jsonl")
     }

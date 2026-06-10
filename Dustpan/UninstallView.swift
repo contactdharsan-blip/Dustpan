@@ -163,7 +163,7 @@ struct UninstallView: View {
     }
 
     /// Honest upfront framing: the bundle is root-owned, so Finder performs the
-    /// move and macOS shows its standard admin-authorization popup — Cleanitup
+    /// move and macOS shows its standard admin-authorization popup — Dustpan
     /// never sees the password; the user authorizes each operation in-app.
     private func adminAuthNotice(for app: InstalledApp) -> some View {
         HStack(alignment: .top, spacing: 12) {
@@ -173,7 +173,7 @@ struct UninstallView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(app.name) needs admin authorization to remove")
                     .font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
-                Text("It was installed \(app.isAppStore ? "from the App Store" : "with admin privileges") and is owned by the system. When you confirm, macOS shows its standard authorization prompt (password or Touch ID) and Finder moves the app to the Trash — Cleanitup never sees your password. The first time, macOS also asks to let Cleanitup control Finder.")
+                Text("It was installed \(app.isAppStore ? "from the App Store" : "with admin privileges") and is owned by the system. When you confirm, macOS shows its standard authorization prompt (password or Touch ID) and Finder moves the app to the Trash — Dustpan never sees your password. The first time, macOS also asks to let Dustpan control Finder.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -303,7 +303,7 @@ private struct AppRow: View {
                 .buttonStyle(GlassButtonStyle())
                 .disabled(isRunning)
                 .opacity(isRunning ? 0.5 : 1)
-                .help(isRunning ? "Quit \(app.name) first — Cleanitup never force-quits."
+                .help(isRunning ? "Quit \(app.name) first — Dustpan never force-quits."
                       : app.needsAdminToDelete ? "macOS will ask for admin authorization before the app moves to Trash."
                       : "Preview everything before anything moves to Trash")
         }

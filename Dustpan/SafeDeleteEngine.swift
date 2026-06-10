@@ -280,9 +280,9 @@ enum SafeDeleteEngine {
 
     /// Trash a root-owned /Applications bundle by asking Finder to do it.
     /// Finder performs the same move-to-Trash and macOS shows its standard
-    /// admin-authorization popup (password / Touch ID) — Cleanitup itself never
+    /// admin-authorization popup (password / Touch ID) — Dustpan itself never
     /// holds elevated rights and never sees the credential; the user authorizes
-    /// each operation. First use also triggers the one-time "Cleanitup wants to
+    /// each operation. First use also triggers the one-time "Dustpan wants to
     /// control Finder" Automation consent. Runs out-of-process (osascript) so
     /// no app thread blocks while the popup is up. Cancel/denial are surfaced.
     private static func finderTrash(_ url: URL) -> TrashOutcome {
@@ -336,7 +336,7 @@ enum SafeDeleteEngine {
             return "Cancelled — the admin authorization prompt was dismissed. Nothing was moved."
         }
         if stderr.contains("-1743") || stderr.localizedCaseInsensitiveContains("not authorized") {
-            return "Cleanitup isn't allowed to ask Finder. Enable Finder for Cleanitup in System Settings → Privacy & Security → Automation, then try again."
+            return "Dustpan isn't allowed to ask Finder. Enable Finder for Dustpan in System Settings → Privacy & Security → Automation, then try again."
         }
         let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Finder couldn't move it to the Trash." : trimmed

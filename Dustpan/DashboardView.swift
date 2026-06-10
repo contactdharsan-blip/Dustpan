@@ -106,7 +106,7 @@ struct DashboardView: View {
                     .font(.callout).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if snapshot?.isComplete != true {
-                    Text("macOS may ask permission for Desktop, Documents and Downloads — Cleanitup only reads folder sizes.")
+                    Text("macOS may ask permission for Desktop, Documents and Downloads — Dustpan only reads folder sizes.")
                         .font(.caption)
                         .foregroundStyle(Theme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -429,7 +429,7 @@ private struct BreakdownCard: View {
                         bytes: nil,
                         sizeText: "—",
                         isMeasured: true,
-                        caption: "Can't compute the remainder — it would include folders Cleanitup wasn't allowed to read. Grant access and rescan for exact numbers.",
+                        caption: "Can't compute the remainder — it would include folders Dustpan wasn't allowed to read. Grant access and rescan for exact numbers.",
                         used: used
                     )
                 }
@@ -487,7 +487,7 @@ private struct BreakdownCard: View {
             Image(systemName: "lock.shield")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.textTertiary)
-            Text("Some folders need Full Disk Access for exact numbers (\"—\" or \"≥\" above). After granting, relaunch Cleanitup to rescan.")
+            Text("Some folders need Full Disk Access for exact numbers (\"—\" or \"≥\" above). After granting, relaunch Dustpan to rescan.")
                 .font(.caption)
                 .foregroundStyle(Theme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)

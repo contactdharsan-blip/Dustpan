@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "EBF08218F5EF49F6B1747EA0"
-               BuildableName = "Cleanitup.app"
-               BlueprintName = "Cleanitup"
-               ReferencedContainer = "container:Cleanitup.xcodeproj">
+               BuildableName = "Dustpan.app"
+               BlueprintName = "Dustpan"
+               ReferencedContainer = "container:Dustpan.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -43,9 +43,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EBF08218F5EF49F6B1747EA0"
-            BuildableName = "Cleanitup.app"
-            BlueprintName = "Cleanitup"
-            ReferencedContainer = "container:Cleanitup.xcodeproj">
+            BuildableName = "Dustpan.app"
+            BlueprintName = "Dustpan"
+            ReferencedContainer = "container:Dustpan.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -60,9 +60,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "EBF08218F5EF49F6B1747EA0"
-            BuildableName = "Cleanitup.app"
-            BlueprintName = "Cleanitup"
-            ReferencedContainer = "container:Cleanitup.xcodeproj">
+            BuildableName = "Dustpan.app"
+            BlueprintName = "Dustpan"
+            ReferencedContainer = "container:Dustpan.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

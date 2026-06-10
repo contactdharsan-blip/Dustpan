@@ -4,7 +4,7 @@ import Foundation
 // mysteriously enormous (Photos, Mail) on every Mac forum. REPORT-ONLY by
 // design: these are macOS-managed, database-backed stores — deleting files
 // inside them corrupts the database. We measure honestly, explain why each
-// grows, and point at the Apple-blessed fix. Cleanitup never offers to
+// grows, and point at the Apple-blessed fix. Dustpan never offers to
 // clean them, and no other surface lists their contents either (the Large
 // Files deep scan already skips managed libraries).
 //
@@ -79,7 +79,7 @@ enum DiagnosticsEngine {
                 url: mailDownloads,
                 report: SafeDeleteEngine.sizeReport(of: mailDownloads),
                 explanation: "Every attachment you open or Quick Look from Mail is copied here — and never cleaned up. The originals stay safely inside the message store above.",
-                blessedFix: "Quit Mail, then delete the folder's contents in Finder — macOS and Mail recreate what they need. Cleanitup leaves this to you: it sits inside Mail's own container."))
+                blessedFix: "Quit Mail, then delete the folder's contents in Finder — macOS and Mail recreate what they need. Dustpan leaves this to you: it sits inside Mail's own container."))
         }
 
         return found.sorted { $0.report.bytes > $1.report.bytes }

@@ -7,13 +7,13 @@
 	objects = {
 
 /* Begin PBXFileReference section */
-		3215E99136E04F5A98F74767 /* Cleanitup.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cleanitup.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3215E99136E04F5A98F74767 /* Dustpan.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Dustpan.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		8C729E1B70284C1392243628 /* Cleanitup */ = {
+		8C729E1B70284C1392243628 /* Dustpan */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = Cleanitup;
+			path = Dustpan;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -32,7 +32,7 @@
 		0CE73B3612904CD3B55789A3 = {
 			isa = PBXGroup;
 			children = (
-				8C729E1B70284C1392243628 /* Cleanitup */,
+				8C729E1B70284C1392243628 /* Dustpan */,
 				9B11AB0D5963467886611FB0 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -40,7 +40,7 @@
 		9B11AB0D5963467886611FB0 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				3215E99136E04F5A98F74767 /* Cleanitup.app */,
+				3215E99136E04F5A98F74767 /* Dustpan.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -48,9 +48,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		EBF08218F5EF49F6B1747EA0 /* Cleanitup */ = {
+		EBF08218F5EF49F6B1747EA0 /* Dustpan */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = B489456807804047A0870A5F /* Build configuration list for PBXNativeTarget "Cleanitup" */;
+			buildConfigurationList = B489456807804047A0870A5F /* Build configuration list for PBXNativeTarget "Dustpan" */;
 			buildPhases = (
 				B3CBA7EFBC4A43BEAAC9183F /* Sources */,
 				178EE88A0D7A45028A6E1834 /* Frameworks */,
@@ -61,11 +61,11 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				8C729E1B70284C1392243628 /* Cleanitup */,
+				8C729E1B70284C1392243628 /* Dustpan */,
 			);
-			name = Cleanitup;
-			productName = Cleanitup;
-			productReference = 3215E99136E04F5A98F74767 /* Cleanitup.app */;
+			name = Dustpan;
+			productName = Dustpan;
+			productReference = 3215E99136E04F5A98F74767 /* Dustpan.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -83,7 +83,7 @@
 					};
 				};
 			};
-			buildConfigurationList = 22631EA626E0493797D3C151 /* Build configuration list for PBXProject "Cleanitup" */;
+			buildConfigurationList = 22631EA626E0493797D3C151 /* Build configuration list for PBXProject "Dustpan" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -97,7 +97,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				EBF08218F5EF49F6B1747EA0 /* Cleanitup */,
+				EBF08218F5EF49F6B1747EA0 /* Dustpan */,
 			);
 		};
 /* End PBXProject section */
@@ -128,7 +128,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Cleanitup/Cleanitup.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Dustpan/Dustpan.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -136,10 +136,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cleanitup asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
-				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
-				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
-				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dustpan asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -147,7 +147,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.cleanitup.Cleanitup;
+				PRODUCT_BUNDLE_IDENTIFIER = app.dustpan.Dustpan;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -159,7 +159,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = Cleanitup/Cleanitup.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Dustpan/Dustpan.entitlements;
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
@@ -167,10 +167,10 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cleanitup asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
-				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
-				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
-				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Dustpan asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
+				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
+				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Dustpan measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
 				INFOPLIST_KEY_NSMainStoryboardFile = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -178,7 +178,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = app.cleanitup.Cleanitup;
+				PRODUCT_BUNDLE_IDENTIFIER = app.dustpan.Dustpan;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -304,7 +304,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		22631EA626E0493797D3C151 /* Build configuration list for PBXProject "Cleanitup" */ = {
+		22631EA626E0493797D3C151 /* Build configuration list for PBXProject "Dustpan" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				B45B951007FC40ACA5EBD863 /* Debug */,
@@ -313,7 +313,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		B489456807804047A0870A5F /* Build configuration list for PBXNativeTarget "Cleanitup" */ = {
+		B489456807804047A0870A5F /* Build configuration list for PBXNativeTarget "Dustpan" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				753A9CA382BF4E04A876C760 /* Debug */,
