@@ -39,6 +39,15 @@ enum SafetyVerdict: Equatable {
     var isAllowed: Bool { self == .allowed }
 }
 
+/// Honest sizing result. `deniedCount` counts permission-denied subtrees/files
+/// (the byte total is then a FLOOR, shown as "≥"); `rootDenied` means the root
+/// itself was unreadable (shown as "—", never a fake 0).
+struct SizeReport: Equatable {
+    var bytes: Int64 = 0
+    var deniedCount: Int = 0
+    var rootDenied: Bool = false
+}
+
 /// Result of attempting to Trash one item.
 struct TrashOutcome: Identifiable {
     let id = UUID()
@@ -77,29 +86,108 @@ enum SafeDeleteEngine {
 
     // MARK: Sizing
 
-    /// Allocated size of a file or directory tree (what actually frees on disk).
-    static func size(of url: URL) -> Int64 {
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return 0 }
-        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey, .isRegularFileKey]
+    /// True for the permission-denial shapes macOS actually throws: Cocoa 257
+    /// (NSFileReadNoPermissionError, what TCC denials surface as) or a POSIX
+    /// EPERM/EACCES (possibly wrapped as the underlying error).
+    private static func isPermissionError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        if ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoPermissionError { return true } // 257
+        let posix = (ns.userInfo[NSUnderlyingErrorKey] as? NSError) ?? ns
+        return posix.domain == NSPOSIXErrorDomain && (posix.code == Int(EPERM) || posix.code == Int(EACCES))
+    }
 
-        func bytes(_ u: URL) -> Int64 {
-            let v = try? u.resourceValues(forKeys: Set(keys))
-            return Int64(v?.totalFileAllocatedSize ?? v?.fileAllocatedSize ?? 0)
+    /// Allocated size of a file or directory tree, with permission failures
+    /// COUNTED instead of silently swallowed: `deniedCount > 0` means the byte
+    /// total is a floor (display "≥"), `rootDenied` means the root itself was
+    /// unreadable (display "—", never a fake 0). Never crosses volume boundaries.
+    static func sizeReport(of url: URL) -> SizeReport {
+        let fm = FileManager.default
+        var report = SizeReport()
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir) else { return report }
+        let keys: [URLResourceKey] = [.totalFileAllocatedSizeKey, .fileAllocatedSizeKey,
+                                      .isRegularFileKey, .isDirectoryKey, .isVolumeKey]
+
+        func allocatedBytes(_ v: URLResourceValues) -> Int64 {
+            Int64(v.totalFileAllocatedSize ?? v.fileAllocatedSize ?? 0)
         }
 
-        if !isDir.boolValue { return bytes(url) }
+        if !isDir.boolValue {
+            do { report.bytes = allocatedBytes(try url.resourceValues(forKeys: Set(keys))) }
+            catch { if isPermissionError(error) { report.rootDenied = true } }
+            return report
+        }
 
-        var total: Int64 = 0
-        if let en = fm.enumerator(at: url, includingPropertiesForKeys: keys, options: []) {
-            for case let child as URL in en {
-                let v = try? child.resourceValues(forKeys: Set(keys))
-                if v?.isRegularFile == true { total += bytes(child) }
+        // Root probe: an unreadable directory surfaces as denied, never as 0.
+        do { _ = try fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil, options: []) }
+        catch {
+            if isPermissionError(error) { report.rootDenied = true }
+            return report
+        }
+
+        var denied = 0
+        // options stay [] on purpose: package descendants (.app bundles, photo
+        // libraries) and hidden files are real disk usage and MUST be counted.
+        guard let en = fm.enumerator(at: url, includingPropertiesForKeys: keys, options: [],
+                                     errorHandler: { _, error in
+                                         if isPermissionError(error) { denied += 1 }
+                                         return true // continue past failures, never abort the walk
+                                     })
+        else { return report }
+
+        var fileCount = 0
+        for case let child as URL in en {
+            fileCount += 1
+            // Cancellation: return a partial total — callers are already tearing down.
+            if fileCount % 4096 == 0 && Task.isCancelled { break }
+            do {
+                let v = try child.resourceValues(forKeys: Set(keys))
+                if v.isVolume == true { // mounted volume inside the tree — never cross it
+                    if v.isDirectory == true { en.skipDescendants() }
+                    continue
+                }
+                if v.isRegularFile == true { report.bytes += allocatedBytes(v) }
+            } catch {
+                if isPermissionError(error) { denied += 1 }
             }
         }
-        return total
+        report.deniedCount += denied
+        return report
     }
+
+    /// "Rest of root" sizing: sums every top-level child EXCEPT the named ones
+    /// (which other categories itemize), skipping symlinks (e.g. the live
+    /// `~/Library/GroupContainersAlias → Group Containers` hazard) and mount
+    /// points so nothing is double-counted or cross-volume.
+    static func sizeReport(of root: URL, excludingTopLevelNames excluded: Set<String>) -> SizeReport {
+        let fm = FileManager.default
+        var report = SizeReport()
+        let keys: Set<URLResourceKey> = [.isSymbolicLinkKey, .isVolumeKey]
+        let children: [URL]
+        do {
+            // No .skipsHiddenFiles: hidden dirs (~/.npm, ~/.cargo…) are real usage.
+            children = try fm.contentsOfDirectory(at: root, includingPropertiesForKeys: Array(keys), options: [])
+        } catch {
+            if isPermissionError(error) { report.rootDenied = true }
+            return report
+        }
+        for child in children {
+            if Task.isCancelled { break }
+            if excluded.contains(child.lastPathComponent) { continue }
+            let v = try? child.resourceValues(forKeys: keys)
+            if v?.isSymbolicLink == true { continue }
+            if v?.isVolume == true { continue }
+            let sub = sizeReport(of: child)
+            report.bytes += sub.bytes
+            report.deniedCount += sub.deniedCount
+            if sub.rootDenied { report.deniedCount += 1 } // denied subtree → partial total, not 0
+        }
+        return report
+    }
+
+    /// Allocated size of a file or directory tree (what actually frees on disk).
+    /// Shim over sizeReport(of:) for moveToTrash and existing call sites.
+    static func size(of url: URL) -> Int64 { sizeReport(of: url).bytes }
 
     // MARK: Trash (the only destructive op — reversible)
 
@@ -123,15 +211,20 @@ enum SafeDeleteEngine {
 
     static func moveToTrash(_ urls: [URL]) -> [TrashOutcome] { urls.map(moveToTrash) }
 
-    // MARK: Real scan — developer caches (read-only)
+    // MARK: Real scan — reclaimable locations (read-only)
+
+    /// Quick = the fixed, KNOWN reclaimable paths below only (no tree discovery).
+    /// Deep  = strict SUPERSET: Quick + bounded read-only discovery (large per-app
+    ///         caches, simulator devices, Xcode archives, node_modules).
+    enum ScanMode { case quick, deep }
 
     private struct CacheSpec {
         let name: String, relativePath: String, risk: CleanRisk, detail: String
     }
 
-    /// Known, genuinely-reclaimable developer cache locations. Honest risk labels:
+    /// Known, genuinely-reclaimable locations. Honest risk labels:
     /// `.safe` regenerates automatically, `.caution` has a real regeneration cost.
-    private static let developerCacheSpecs: [CacheSpec] = [
+    private static let quickSpecs: [CacheSpec] = [
         .init(name: "Xcode DerivedData", relativePath: "Library/Developer/Xcode/DerivedData",
               risk: .safe, detail: "Rebuilt on next build"),
         .init(name: "Simulator caches", relativePath: "Library/Developer/CoreSimulator/Caches",
@@ -150,13 +243,49 @@ enum SafeDeleteEngine {
               risk: .caution, detail: "Re-downloaded on next build"),
         .init(name: "CocoaPods cache", relativePath: "Library/Caches/CocoaPods",
               risk: .safe, detail: "Repopulated by pod install"),
+        .init(name: "SwiftPM cache", relativePath: "Library/Caches/org.swift.swiftpm",
+              risk: .safe, detail: "Re-cloned on next package resolve"),
+        .init(name: "pnpm store", relativePath: "Library/pnpm/store",
+              risk: .safe, detail: "Repopulated by pnpm install"),
+        .init(name: "pnpm store (legacy)", relativePath: ".pnpm-store",
+              risk: .safe, detail: "Repopulated by pnpm install"),
+        .init(name: "Playwright browsers", relativePath: "Library/Caches/ms-playwright",
+              risk: .safe, detail: "Re-downloaded by `playwright install`"),
+        .init(name: "Playwright (Go) browsers", relativePath: "Library/Caches/ms-playwright-go",
+              risk: .safe, detail: "Re-downloaded by playwright-go"),
+        .init(name: "Puppeteer browsers", relativePath: ".cache/puppeteer",
+              risk: .safe, detail: "Re-downloaded by puppeteer on next install"),
+        .init(name: "Cargo registry", relativePath: ".cargo/registry",
+              risk: .safe, detail: "Crates re-downloaded on next build"),
+        .init(name: "uv cache", relativePath: ".cache/uv",
+              risk: .safe, detail: "Repopulated by uv"),
+        .init(name: "Bun cache", relativePath: ".bun/install/cache",
+              risk: .safe, detail: "Repopulated by bun install"),
+        .init(name: "Deno cache", relativePath: "Library/Caches/deno",
+              risk: .safe, detail: "Repopulated by deno"),
+        .init(name: "Go build cache", relativePath: "Library/Caches/go-build",
+              risk: .safe, detail: "Rebuilt by the Go toolchain"),
+        .init(name: "App logs", relativePath: "Library/Logs",
+              risk: .safe, detail: "Apps recreate logs; past diagnostic history is lost"),
+        .init(name: "Docker disk image",
+              relativePath: "Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw",
+              risk: .caution,
+              detail: "Deletes all containers/images/volumes; quit Docker Desktop first. `docker system prune` is the in-place alternative"),
     ]
 
-    /// Scan the known developer-cache paths that actually exist, with real sizes.
-    /// Read-only: discovers and measures, deletes nothing.
-    static func scanDeveloperCaches() -> [ScannedItem] {
+    /// ~/Library/Caches subdirectory names already covered by a quick spec —
+    /// deep discovery must skip these so nothing is listed twice.
+    private static let specCoveredCacheNames: Set<String> = [
+        "Homebrew", "Yarn", "pip", "CocoaPods", "org.swift.swiftpm",
+        "ms-playwright", "ms-playwright-go", "deno", "go-build",
+    ]
+
+    /// Scan reclaimable locations, read-only (discovers and measures, deletes
+    /// nothing). Every returned URL is inside home, so `moveToTrash`'s verdict()
+    /// gate keeps holding for anything the user later confirms.
+    static func scanReclaimable(mode: ScanMode) -> [ScannedItem] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return developerCacheSpecs.compactMap { spec in
+        var items: [ScannedItem] = quickSpecs.compactMap { spec in
             let url = home.appendingPathComponent(spec.relativePath)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             let bytes = size(of: url)
@@ -164,6 +293,161 @@ enum SafeDeleteEngine {
             return ScannedItem(name: spec.name, url: url, bytes: bytes,
                                risk: spec.risk, detail: spec.detail)
         }
-        .sorted { $0.bytes > $1.bytes }
+        // iOS device backups: one listdir of a fixed known path (no traversal),
+        // one item per backup. FDA-denied root → omitted entirely, never shown as 0.
+        items += scanDeviceBackups(home: home)
+
+        if mode == .deep {
+            let discovered = discoverLargeAppCaches(home: home)
+                + discoverSimulatorDevices(home: home)
+                + discoverXcodeArchives(home: home)
+                + discoverNodeModules(home: home)
+            for item in discovered {
+                // Global dedupe: drop anything equal to or inside an emitted item.
+                let covered = items.contains {
+                    item.url.path == $0.url.path || item.url.path.hasPrefix($0.url.path + "/")
+                }
+                if !covered { items.append(item) }
+            }
+        }
+        return items.sorted { $0.bytes > $1.bytes }
+    }
+
+    /// Compatibility wrapper — the historical name now means a quick scan.
+    static func scanDeveloperCaches() -> [ScannedItem] { scanReclaimable(mode: .quick) }
+
+    // MARK: Quick — iOS device backups (fixed path, one listdir)
+
+    private static func scanDeviceBackups(home: URL) -> [ScannedItem] {
+        let root = home.appendingPathComponent("Library/Application Support/MobileSync/Backup")
+        guard let backups = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: nil, options: []) else { return [] }
+        return backups.compactMap { dir in
+            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return nil }
+            let bytes = size(of: dir)
+            guard bytes > 0 else { return nil }
+            var name = "iOS backup"
+            var dateSuffix = ""
+            let infoPlist = dir.appendingPathComponent("Info.plist")
+            if let data = try? Data(contentsOf: infoPlist),
+               let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+                if let device = plist["Display Name"] as? String ?? plist["Device Name"] as? String {
+                    name = "iOS backup — \(device)"
+                }
+                if let date = plist["Last Backup Date"] as? Date {
+                    dateSuffix = " (last backed up \(date.formatted(date: .abbreviated, time: .omitted)))"
+                }
+            }
+            return ScannedItem(
+                name: name, url: dir, bytes: bytes, risk: .caution,
+                detail: "That device can only be restored from a newer backup" + dateSuffix)
+        }
+    }
+
+    // MARK: Deep — bounded, read-only discovery (symlink-skipping, cancellable)
+
+    /// One listdir of ~/Library/Caches; each subdirectory ≥ 100 MB becomes its own
+    /// `.safe` item. Spec-covered names are skipped (deduped); permission-denied
+    /// subdirectories are skipped via `rootDenied`, never shown as 0.
+    private static func discoverLargeAppCaches(home: URL) -> [ScannedItem] {
+        let root = home.appendingPathComponent("Library/Caches")
+        let threshold: Int64 = 100_000_000
+        guard let children = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey], options: [])
+        else { return [] }
+        var found: [ScannedItem] = []
+        for child in children {
+            if Task.isCancelled { break }
+            if specCoveredCacheNames.contains(child.lastPathComponent) { continue }
+            let v = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard v?.isDirectory == true, v?.isSymbolicLink != true else { continue }
+            let report = sizeReport(of: child)
+            guard !report.rootDenied, report.bytes >= threshold else { continue }
+            found.append(ScannedItem(
+                name: "Cache — \(child.lastPathComponent)", url: child, bytes: report.bytes,
+                risk: .safe, detail: "Apps rebuild caches on next launch"))
+        }
+        return found
+    }
+
+    /// Per-device simulator data dirs (the single biggest reclaim on dev machines).
+    /// Reads each device.plist directly (no xcrun dependency); booted devices
+    /// (state == 3) are skipped. Always per-device items, never one bulk row.
+    private static func discoverSimulatorDevices(home: URL) -> [ScannedItem] {
+        let root = home.appendingPathComponent("Library/Developer/CoreSimulator/Devices")
+        guard let devices = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []) else { return [] }
+        var found: [ScannedItem] = []
+        for dir in devices {
+            if Task.isCancelled { break }
+            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+            guard let data = try? Data(contentsOf: dir.appendingPathComponent("device.plist")),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            else { continue }
+            if (plist["state"] as? Int) == 3 { continue } // booted — leave it alone
+            let name = plist["name"] as? String ?? dir.lastPathComponent
+            let bytes = size(of: dir)
+            guard bytes > 0 else { continue }
+            found.append(ScannedItem(
+                name: "Simulator — \(name)", url: dir, bytes: bytes, risk: .caution,
+                detail: "Removes that simulator's apps and data; Xcode recreates devices on demand. Quit Simulator first."))
+        }
+        return found
+    }
+
+    /// One item per dated Xcode archive folder.
+    private static func discoverXcodeArchives(home: URL) -> [ScannedItem] {
+        let root = home.appendingPathComponent("Library/Developer/Xcode/Archives")
+        guard let folders = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []) else { return [] }
+        var found: [ScannedItem] = []
+        for dir in folders {
+            if Task.isCancelled { break }
+            guard (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { continue }
+            let bytes = size(of: dir)
+            guard bytes > 0 else { continue }
+            found.append(ScannedItem(
+                name: "Xcode archives — \(dir.lastPathComponent)", url: dir, bytes: bytes, risk: .caution,
+                detail: "Contains dSYMs needed to symbolicate shipped builds"))
+        }
+        return found
+    }
+
+    /// Bounded walk (maxDepth 4) of common project roots for node_modules dirs.
+    /// Read-only, prunes into found node_modules, skips hidden dirs, symlinks,
+    /// and mount points. `.caution`: the project won't build until reinstalled.
+    private static func discoverNodeModules(home: URL) -> [ScannedItem] {
+        let roots = ["Downloads", "Documents", "Desktop"].map(home.appendingPathComponent)
+        var found: [ScannedItem] = []
+
+        func walk(_ dir: URL, depth: Int) {
+            if Task.isCancelled || depth > 4 { return }
+            let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .isVolumeKey,
+                                             .contentModificationDateKey]
+            guard let children = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
+            else { return }
+            for child in children {
+                if Task.isCancelled { return }
+                let v = try? child.resourceValues(forKeys: keys)
+                guard v?.isDirectory == true, v?.isSymbolicLink != true, v?.isVolume != true else { continue }
+                if child.lastPathComponent == "node_modules" {
+                    let bytes = size(of: child)
+                    guard bytes > 0 else { continue }
+                    let project = child.deletingLastPathComponent()
+                    let modified = (try? project.resourceValues(forKeys: [.contentModificationDateKey]))?
+                        .contentModificationDate
+                    let when = modified.map { " Project last modified \($0.formatted(date: .abbreviated, time: .omitted))." } ?? ""
+                    found.append(ScannedItem(
+                        name: "node_modules — \(project.lastPathComponent)", url: child, bytes: bytes,
+                        risk: .caution,
+                        detail: "Restored by npm/pnpm install; project won't build until reinstalled." + when))
+                    continue // prune: never descend into a found node_modules
+                }
+                walk(child, depth: depth + 1)
+            }
+        }
+        for root in roots { walk(root, depth: 1) }
+        return found
     }
 }

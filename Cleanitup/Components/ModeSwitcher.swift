@@ -64,25 +64,30 @@ struct ModeSwitcher<Option: Hashable>: View {
         HStack(spacing: 4) {
             ForEach(options, id: \.self) { option in
                 let isSelected = option == selection
-                Text(title(option))
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background {
-                        if isSelected {
-                            let pill = RoundedRectangle(cornerRadius: Theme.radiusMd, style: .continuous)
-                            pill
-                                .fill(.ultraThinMaterial)
-                                .overlay(pill.strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
-                                .matchedGeometryEffect(id: "indicator", in: indicatorNS)
+                // A real Button (not Text + onTapGesture) so keyboard and
+                // VoiceOver users can reach and select each mode.
+                Button {
+                    if reduceMotion { selection = option }
+                    else { withAnimation(Theme.spring) { selection = option } }
+                } label: {
+                    Text(title(option))
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(isSelected ? Theme.textPrimary : Theme.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background {
+                            if isSelected {
+                                let pill = RoundedRectangle(cornerRadius: Theme.radiusMd, style: .continuous)
+                                pill
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(pill.strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
+                                    .matchedGeometryEffect(id: "indicator", in: indicatorNS)
+                            }
                         }
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        if reduceMotion { selection = option }
-                        else { withAnimation(Theme.spring) { selection = option } }
-                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(title(option))
+                .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             }
         }
         .padding(4)
