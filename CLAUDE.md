@@ -111,6 +111,7 @@ Two strict layers, one rule: **every number is a real measurement or an em-dash.
   (apps + leftovers + orphans), `LargeFileEngine`, `ClutterEngine` (installers/
   screenshots, age-sorted), `DuplicateEngine` (size → partial-hash → full-SHA256,
   byte-identical only; hard-link-aware; suggested-keep never pre-selected),
+  `LoginItemsEngine` (launchd jobs in plain language, report-only),
   `SnapshotEngine` (tmutil, report-only),
   `DiagnosticsEngine` (Photos/Mail, report-only), `UndoJournal` (JSONL audit log;
   every trash attempt recorded at engine level — call sites can't forget).
