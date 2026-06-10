@@ -221,6 +221,8 @@ Every incumbent weakness becomes our reason to exist:
   corroborated by exactly **one measured machine (~50 GB)**. *Before betting v1.1's positioning on
   this, validate with real data from ≥10–20 developer machines* (e.g. a tiny `du` script shared on
   HN/Reddit). If it doesn't hold broadly, keep dev caches as a feature, not the headline.
+  **Instrument ready (2026-06-11):** `scripts/measure-dev-caches.sh` — read-only, auditable,
+  paste-your-own-results. Second data point: this Mac measures 44.2 GB via the script.
 - **A2.** Pearcleaner's exact 2026 license/maintenance status and whether CleanMyMac still misses
   per-project `node_modules` are point-in-time — re-verify before launch messaging.
 - **A3.** Pricing/sentiment facts are point-in-time and partially second-hand (named subreddits not
@@ -231,7 +233,7 @@ Every incumbent weakness becomes our reason to exist:
 |---|---|---|---|
 | D1 | **Launch wedge narrative** | Developer-first vs consumer-safe-uninstaller-first | **RESOLVED**: consumer-safe core (v1.0) built; dev-cache headline (v1.1) still pending A1 |
 | D2 | **License** | GPL-3.0 (anti-reskin copyleft) vs Apache-2.0/MIT (contributor-friendly) | **RESOLVED**: GPL-3.0, shipped in the repo since first push |
-| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | **RESOLVED** (2026-06-11): **Dustpan** — cleanest collision profile of 15 collision-checked candidates (no App Store app, no Homebrew cask/formula, no notable repo); metaphor matches the preview-then-Trash model. Remaining diligence: 2-min USPTO search before Cask submission (research was web/brew/gh-based, not a trademark query) |
+| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | **RESOLVED + DILIGENCE CLOSED** (2026-06-11): **Dustpan**. Trademark verdict CLEAR-WITH-NOTES — the only LIVE USPTO "Dustpan" mark (sn 98415469, verified on TSDR) is Class 28 *toys*, no software/SaaS-class mark exists; App Store (9 storefronts via iTunes Search API), Homebrew, and notable GitHub all clear. Notes: dustpan.app is third-party-registered but dormant (clientHold, no site) — getdustpan.com is available; a 0-star Windows hobby cleaner shares the name (no traction, no bar). EUIPO/UKIPO not checked — only relevant if registering abroad |
 | D4 | **Intel support** | Universal vs Apple-Silicon-only | **RESOLVED** (2026-06-11): Universal — Release builds verified fat (arm64 + x86_64), zero extra cost |
 | D5 | **Background watcher** (ever?) | Defer vs never | **RESOLVED**: deferred past v1.0 (per D7, 2026-06-10) |
 | D6 | **Stack** | Native SwiftUI vs cross-platform | **RESOLVED**: native SwiftUI — the entire app is built on it |
