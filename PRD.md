@@ -226,15 +226,15 @@ Every incumbent weakness becomes our reason to exist:
 - **A3.** Pricing/sentiment facts are point-in-time and partially second-hand (named subreddits not
   directly sampled). Re-check before any public comparison claims.
 
-### Open decisions (need a call before/at build start)
-| # | Decision | Options | Lean |
+### Open decisions — status as of 2026-06-11
+| # | Decision | Options | Status |
 |---|---|---|---|
-| D1 | **Launch wedge narrative** | Developer-first vs consumer-safe-uninstaller-first | **Consumer-safe core (v1.0) → dev-cache headline (v1.1)**, pending A1 |
-| D2 | **License** | GPL-3.0 (anti-reskin copyleft) vs Apache-2.0/MIT (contributor-friendly) | **GPL-3.0** (rule out Commons Clause) |
-| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | "Cleanitup" is the working name — *decide before Homebrew Cask submission* |
-| D4 | **Intel support** | Universal vs Apple-Silicon-only | Universal if cheap; reassess on maintenance burden |
-| D5 | **Background watcher** (ever?) | Defer vs never | Defer; decide long-term stance post-v1 |
-| D6 | **Stack** | Native SwiftUI (matches Pearcleaner, best macOS integration) vs cross-platform | TBD — Swift/SwiftUI strongly indicated for a trust-first native Mac app |
+| D1 | **Launch wedge narrative** | Developer-first vs consumer-safe-uninstaller-first | **RESOLVED**: consumer-safe core (v1.0) built; dev-cache headline (v1.1) still pending A1 |
+| D2 | **License** | GPL-3.0 (anti-reskin copyleft) vs Apache-2.0/MIT (contributor-friendly) | **RESOLVED**: GPL-3.0, shipped in the repo since first push |
+| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | **OPEN** (last one): candidate brainstorm + collision check in progress; decide before Homebrew Cask submission |
+| D4 | **Intel support** | Universal vs Apple-Silicon-only | **RESOLVED** (2026-06-11): Universal — Release builds verified fat (arm64 + x86_64), zero extra cost |
+| D5 | **Background watcher** (ever?) | Defer vs never | **RESOLVED**: deferred past v1.0 (per D7, 2026-06-10) |
+| D6 | **Stack** | Native SwiftUI vs cross-platform | **RESOLVED**: native SwiftUI — the entire app is built on it |
 
 ---
 
