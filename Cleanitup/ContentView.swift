@@ -245,7 +245,14 @@ struct ScanView: View {
             let hiddenCount = selectedItems
                 .filter { item in !filtered.contains(where: { $0.id == item.id }) }
                 .count
-            Text("Items go to the Trash and are recorded in History — you can put them back. Nothing is permanently deleted."
+            // Name what's about to move — capped so the dialog stays readable.
+            let preview = selectedItems.prefix(6)
+                .map { "\($0.name)  (\(ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file)))" }
+                .joined(separator: "\n")
+            let overflow = selectedItems.count - 6
+            Text(preview
+                 + (overflow > 0 ? "\n…and \(overflow) more" : "")
+                 + "\n\nItems go to the Trash and are recorded in History — you can put them back. Nothing is permanently deleted."
                  + (hiddenCount > 0
                     ? " Includes \(hiddenCount) selected item\(hiddenCount == 1 ? "" : "s") not shown by the current filter."
                     : ""))

@@ -231,7 +231,7 @@ Every incumbent weakness becomes our reason to exist:
 |---|---|---|---|
 | D1 | **Launch wedge narrative** | Developer-first vs consumer-safe-uninstaller-first | **RESOLVED**: consumer-safe core (v1.0) built; dev-cache headline (v1.1) still pending A1 |
 | D2 | **License** | GPL-3.0 (anti-reskin copyleft) vs Apache-2.0/MIT (contributor-friendly) | **RESOLVED**: GPL-3.0, shipped in the repo since first push |
-| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | **OPEN** (last one): candidate brainstorm + collision check in progress; decide before Homebrew Cask submission |
+| D3 | **Name** | Must avoid CleanMy*/Booster/Optimizer patterns; must be discoverable | **RESOLVED** (2026-06-11): **Dustpan** — cleanest collision profile of 15 collision-checked candidates (no App Store app, no Homebrew cask/formula, no notable repo); metaphor matches the preview-then-Trash model. Remaining diligence: 2-min USPTO search before Cask submission (research was web/brew/gh-based, not a trademark query) |
 | D4 | **Intel support** | Universal vs Apple-Silicon-only | **RESOLVED** (2026-06-11): Universal — Release builds verified fat (arm64 + x86_64), zero extra cost |
 | D5 | **Background watcher** (ever?) | Defer vs never | **RESOLVED**: deferred past v1.0 (per D7, 2026-06-10) |
 | D6 | **Stack** | Native SwiftUI vs cross-platform | **RESOLVED**: native SwiftUI — the entire app is built on it |
