@@ -136,6 +136,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cleanitup asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
@@ -166,6 +167,7 @@
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSAppleEventsUsageDescription = "Cleanitup asks Finder to move admin-protected apps to the Trash, so macOS can show its authorization prompt. Nothing else is automated.";
 				INFOPLIST_KEY_NSDesktopFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSDocumentsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";
 				INFOPLIST_KEY_NSDownloadsFolderUsageDescription = "Cleanitup measures this folder's size so the storage breakdown is real. Nothing is read beyond file sizes.";

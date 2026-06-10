@@ -38,7 +38,7 @@ enum SafetyVerdict: Equatable {
     case blockedSystemPath   // under a SIP/system root — never touch
     case blockedOutsideHome  // outside the user's home directory
     case blockedMissing      // nothing there to delete
-    case blockedNeedsAdmin   // root-owned (App Store/installer) — macOS requires admin auth
+    case blockedNeedsAdmin   // root-owned (App Store/installer) — Finder asks for admin auth
 
     var isAllowed: Bool { self == .allowed }
 }
@@ -89,9 +89,10 @@ enum SafeDeleteEngine {
 
     /// App Store apps (and anything installed by a root installer) are owned by
     /// root — a user-level trashItem is refused by macOS with an opaque error.
-    /// Cleanitup never escalates privileges, so it refuses upfront with a clear
-    /// reason instead. Unreadable attributes fall through to the OS refusal at
-    /// trash time (still surfaced, never swallowed).
+    /// Those route through `finderTrash`: Finder performs the same Trash-only
+    /// move and macOS shows its standard admin-authorization popup. Unreadable
+    /// attributes fall through to the OS refusal at trash time (still surfaced,
+    /// never swallowed).
     static func ownedByAnotherUser(_ path: String) -> Bool {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
               let owner = attrs[.ownerAccountID] as? NSNumber else { return false }
@@ -257,11 +258,13 @@ enum SafeDeleteEngine {
 
     private static func trashWithoutJournal(_ url: URL) -> TrashOutcome {
         let v = verdict(for: url)
+        // Root-owned uninstall carve-out: macOS refuses a user-level trashItem,
+        // so the move is delegated to Finder, which shows the system admin-auth
+        // popup. Only the /Applications top-level-.app verdict can return this.
+        if v == .blockedNeedsAdmin { return finderTrash(url) }
         guard v.isAllowed else {
-            let reason = v == .blockedNeedsAdmin
-                ? "Owned by macOS (root) — removing it needs admin authorization, and Cleanitup never escalates privileges. Use Launchpad or Finder."
-                : "Refused (\(v)) — outside the safe zone"
-            return TrashOutcome(url: url, success: false, reclaimedBytes: 0, error: reason)
+            return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
+                                error: "Refused (\(v)) — outside the safe zone")
         }
         let reclaimed = size(of: url)
         do {
@@ -273,6 +276,70 @@ enum SafeDeleteEngine {
             return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
                                 error: error.localizedDescription)
         }
+    }
+
+    /// Trash a root-owned /Applications bundle by asking Finder to do it.
+    /// Finder performs the same move-to-Trash and macOS shows its standard
+    /// admin-authorization popup (password / Touch ID) — Cleanitup itself never
+    /// holds elevated rights and never sees the credential; the user authorizes
+    /// each operation. First use also triggers the one-time "Cleanitup wants to
+    /// control Finder" Automation consent. Runs out-of-process (osascript) so
+    /// no app thread blocks while the popup is up. Cancel/denial are surfaced.
+    private static func finderTrash(_ url: URL) -> TrashOutcome {
+        let reclaimed = size(of: url)
+        // The path travels as argv, never interpolated into the script source —
+        // a hostile bundle name (quotes, newlines…) can't inject AppleScript.
+        let script = """
+        on run argv
+            set p to POSIX file (item 1 of argv)
+            tell application "Finder" to set trashed to (delete p) as alias
+            return POSIX path of trashed
+        end run
+        """
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script, url.path]
+        let stdout = Pipe(), stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        do { try process.run() } catch {
+            return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
+                                error: "Couldn't ask Finder to move it: \(error.localizedDescription)")
+        }
+        process.waitUntilExit()
+        let outText = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        let errText = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        guard process.terminationStatus == 0 else {
+            return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
+                                error: friendlyFinderError(errText))
+        }
+        // Finder reports where the item landed ("/Users/x/.Trash/Name.app/") —
+        // the journal's Put Back handle. Fall back to the conventional Trash
+        // path if the output didn't parse; nil stays nil (honest notRestorable).
+        var landed: URL?
+        var path = outText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        if path.hasPrefix("/") {
+            landed = URL(fileURLWithPath: path)
+        } else {
+            let guess = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent(".Trash/\(url.lastPathComponent)")
+            if FileManager.default.fileExists(atPath: guess.path) { landed = guess }
+        }
+        return TrashOutcome(url: url, success: true, reclaimedBytes: reclaimed,
+                            error: nil, trashedTo: landed)
+    }
+
+    /// Map osascript's stderr to something the user can act on — never swallowed.
+    private static func friendlyFinderError(_ stderr: String) -> String {
+        if stderr.contains("-128") {
+            return "Cancelled — the admin authorization prompt was dismissed. Nothing was moved."
+        }
+        if stderr.contains("-1743") || stderr.localizedCaseInsensitiveContains("not authorized") {
+            return "Cleanitup isn't allowed to ask Finder. Enable Finder for Cleanitup in System Settings → Privacy & Security → Automation, then try again."
+        }
+        let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Finder couldn't move it to the Trash." : trimmed
     }
 
     // MARK: Real scan — reclaimable locations (read-only)

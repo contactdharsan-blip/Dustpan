@@ -5,8 +5,8 @@ import Observation
 // Phase 1.1 UI — pick an app, preview EVERYTHING that would move to Trash
 // (bundle + leftovers, each with provenance and a Safe/Caution label), confirm.
 // Running apps can't be uninstalled — quit first (no force-kill in v1.0).
-// App Store / root-installed apps: the bundle itself can't be trashed without
-// admin auth (Cleanitup never escalates) — badge + explainer, leftovers only.
+// App Store / root-installed apps: trashing the bundle is delegated to Finder,
+// which shows the macOS admin-authorization popup — explained upfront, in-app.
 
 /// App-scoped uninstaller state (the StatsStore pattern): the app list, the
 /// chosen app, its leftover preview and selections survive sidebar switches.
@@ -39,11 +39,9 @@ struct UninstallView: View {
     }
     private var selectedItems: [ScannedItem] { session.items.filter { session.selected.contains($0.id) } }
     private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
-    /// Leftovers-only wording when the bundle itself can't be offered (App Store).
     private var confirmTitle: String {
         let name = session.chosen?.name ?? "app"
-        let action = session.chosen?.needsAdminToDelete == true ? "Clean \(name) leftovers" : "Uninstall \(name)"
-        return "\(action) — move \(session.selected.count) item\(session.selected.count == 1 ? "" : "s") to Trash?"
+        return "Uninstall \(name) — move \(session.selected.count) item\(session.selected.count == 1 ? "" : "s") to Trash?"
     }
 
     var body: some View {
@@ -106,7 +104,7 @@ struct UninstallView: View {
 
         case .appList:
             GlassTextField(placeholder: "Search applications", text: $session.search)
-            Text("\(filteredApps.count) of \(session.apps.count) apps · running apps must be quit before uninstalling · App Store apps: leftover cleanup only")
+            Text("\(filteredApps.count) of \(session.apps.count) apps · running apps must be quit before uninstalling · admin-installed apps ask for macOS authorization")
                 .font(.caption).foregroundStyle(Theme.textTertiary)
             VStack(spacing: 10) {
                 ForEach(filteredApps) { app in
@@ -144,7 +142,7 @@ struct UninstallView: View {
                 Spacer()
             }
             if let app = session.chosen, app.needsAdminToDelete {
-                protectedBundleNotice(for: app)
+                adminAuthNotice(for: app)
             }
             summary
             Text("Exact bundle-ID matches are pre-selected. Name-only matches are Caution — verify them before opting in.")
@@ -164,18 +162,18 @@ struct UninstallView: View {
         }
     }
 
-    /// Honest upfront framing instead of a cryptic OS refusal: the bundle is
-    /// root-owned, macOS requires admin auth to remove it, and Cleanitup never
-    /// escalates privileges — so the app itself isn't offered, only leftovers.
-    private func protectedBundleNotice(for app: InstalledApp) -> some View {
+    /// Honest upfront framing: the bundle is root-owned, so Finder performs the
+    /// move and macOS shows its standard admin-authorization popup — Cleanitup
+    /// never sees the password; the user authorizes each operation in-app.
+    private func adminAuthNotice(for app: InstalledApp) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "lock.shield")
                 .font(.system(size: 20, weight: .medium))
                 .foregroundStyle(Theme.primary)
             VStack(alignment: .leading, spacing: 4) {
-                Text("\(app.name) itself stays — macOS protects it")
+                Text("\(app.name) needs admin authorization to remove")
                     .font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
-                Text("It was installed \(app.isAppStore ? "from the App Store" : "with admin privileges") and is owned by the system. Removing the app needs admin authorization, which Cleanitup never asks for. Remove it in Launchpad (click and hold) or Finder — the leftover files below are yours, and Cleanitup can clean them either way.")
+                Text("It was installed \(app.isAppStore ? "from the App Store" : "with admin privileges") and is owned by the system. When you confirm, macOS shows its standard authorization prompt (password or Touch ID) and Finder moves the app to the Trash — Cleanitup never sees your password. The first time, macOS also asks to let Cleanitup control Finder.")
                     .font(.caption).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -292,7 +290,7 @@ private struct AppRow: View {
             Spacer()
             if app.isAppStore {
                 StatusBadge(kind: .info, text: "App Store")
-                    .help("Installed from the App Store — macOS requires admin authorization to remove it, so Cleanitup cleans its leftovers only.")
+                    .help("Installed from the App Store — macOS asks for admin authorization when it moves to Trash.")
             }
             if isRunning {
                 StatusBadge(kind: .caution, text: "Running")
@@ -301,12 +299,12 @@ private struct AppRow: View {
                 Text("Used \(used.formatted(date: .abbreviated, time: .omitted))")
                     .font(.caption).foregroundStyle(Theme.textTertiary)
             }
-            Button(app.needsAdminToDelete ? "Clean leftovers…" : "Uninstall…", action: onChoose)
+            Button("Uninstall…", action: onChoose)
                 .buttonStyle(GlassButtonStyle())
                 .disabled(isRunning)
                 .opacity(isRunning ? 0.5 : 1)
                 .help(isRunning ? "Quit \(app.name) first — Cleanitup never force-quits."
-                      : app.needsAdminToDelete ? "The app itself needs admin auth to remove — preview and clean its leftover files."
+                      : app.needsAdminToDelete ? "macOS will ask for admin authorization before the app moves to Trash."
                       : "Preview everything before anything moves to Trash")
         }
         .padding(14)
