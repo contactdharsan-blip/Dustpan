@@ -20,8 +20,12 @@ struct ScannedItem: Identifiable, Hashable {
     let risk: CleanRisk
     let detail: String
     /// Vendor prefix ("com.spotify") of the app this item belonged to, when a
-    /// scan can infer one (orphan scan). Lets the UI group leftovers per app.
+    /// scan can infer one (orphan scan). The duplicate finder reuses it as the
+    /// group key (content-hash prefix). Lets the UI group related items.
     var ownerApp: String? = nil
+    /// Duplicate finder only: the newest copy in a group, suggested (never
+    /// pre-selected) as the one to keep. Group-toggle gestures must skip it.
+    var suggestedKeep: Bool = false
 
     var sizeText: String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 

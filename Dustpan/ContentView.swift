@@ -12,6 +12,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     case orphanScan = "Orphaned Files"
     case largeFiles = "Large Files"
     case clutter = "Installers & Screenshots"
+    case duplicates = "Duplicate Files"
     case developerCaches = "Developer Caches"
 
     var id: String { rawValue }
@@ -22,6 +23,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         case .orphanScan: return "doc.badge.gearshape"
         case .largeFiles: return "externaldrive.badge.minus"
         case .clutter: return "camera.on.rectangle"
+        case .duplicates: return "doc.on.doc"
         case .developerCaches: return "hammer"
         }
     }
@@ -30,6 +32,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         switch self {
         case .appUninstaller, .orphanScan, .largeFiles, .clutter: return "v1.0 · live"
         case .developerCaches: return "v1.1 · live"
+        case .duplicates: return "v1.2 · live"
         }
     }
 
@@ -42,6 +45,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     var quickCaption: String {
         switch self {
         case .developerCaches: return "Checks known reclaimable locations only — fast."
+        case .duplicates: return "Byte-identical files ≥ 10 MB in Downloads, Desktop, Documents, Movies, and Music — confirmed by full content hash, not name or size. The newest copy is suggested to keep; nothing is pre-selected."
         case .largeFiles: return "Files ≥ 100 MB in Downloads, Desktop, Documents, Movies, and Music."
         case .orphanScan: return "Scans ~/Library for files whose owning app is no longer installed. Everything found is Caution — verify before trashing."
         case .clutter: return "Installer images in Downloads, plus screenshots and screen recordings on Desktop and in Downloads. Oldest first — age is the signal. Everything is Caution: your files, your call."
@@ -52,6 +56,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
     var deepCaption: String {
         switch self {
         case .developerCaches: return "Everything in Quick, plus a read-only search of your folders for large caches, simulator devices, old archives, and node_modules. Slower."
+        case .duplicates: return "Byte-identical files ≥ 10 MB across your whole home folder (except ~/Library — other categories own it). Hashing every same-size pair is disk-heavy. Slower."
         case .largeFiles: return "Files ≥ 100 MB across your whole home folder (except ~/Library — other categories own it). Photos/Music libraries and app bundles are skipped: macOS manages those. Slower."
         case .orphanScan, .clutter, .appUninstaller: return ""
         }
@@ -63,6 +68,7 @@ enum CleanupCategory: String, CaseIterable, Identifiable {
         case .orphanScan: return "Find files left behind by apps you already deleted."
         case .largeFiles: return "Surface your biggest files — you decide what moves to Trash."
         case .clutter: return "Old installers and screenshots, oldest first — the stale stuff is obvious."
+        case .duplicates: return "Find byte-identical copies of your files — keep one, trash the rest."
         case .developerCaches: return "Reclaim Xcode, simulator, and package-manager caches over known-safe paths."
         }
     }
@@ -350,12 +356,16 @@ struct ScanView: View {
             summary
             Text(category == .orphanScan
                  ? "Grouped by the app the files belonged to — the header selects a whole group. Everything is Caution: verify before trashing."
+                 : category == .duplicates
+                 ? "Grouped by identical content — the header selects every copy except the suggested keep. Nothing is pre-selected: your files, your call."
                  : "Safe items are pre-selected — Caution items are left for you to opt into.")
                 .font(.caption)
                 .foregroundStyle(Theme.textTertiary)
             GlassTextField(placeholder: "Filter results", text: $session.filter)
             if category == .orphanScan {
                 orphanGroupList
+            } else if category == .duplicates {
+                duplicateGroupList
             } else {
                 VStack(spacing: 12) {
                     ForEach(Array(filtered.enumerated()), id: \.element.id) { index, item in
@@ -384,9 +394,9 @@ struct ScanView: View {
             reduceMotion: reduceMotion,
             onToggle: { toggle(item) },
             onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) },
-            // Quick Look where it answers "what IS this file" — large files and
-            // clutter (screenshots/installers are exactly what it's for).
-            onPreview: (category == .largeFiles || category == .clutter) ? { quickLookURL = item.url } : nil
+            // Quick Look where it answers "what IS this file" — large files,
+            // clutter, and duplicates (eyeball a copy before trashing it).
+            onPreview: (category == .largeFiles || category == .clutter || category == .duplicates) ? { quickLookURL = item.url } : nil
         )
     }
 
@@ -420,6 +430,41 @@ struct ScanView: View {
         let ids = Set(groupItems.map(\.id))
         if ids.isSubset(of: session.selected) { session.selected.subtract(ids) }
         else { session.selected.formUnion(ids) }
+    }
+
+    /// Duplicates grouped by content hash (the engine puts it in ownerApp),
+    /// biggest reclaim first. Engine ordering inside a group is kept: the
+    /// suggested-keep copy is always first.
+    private var duplicateGroups: [(key: String, items: [ScannedItem])] {
+        Dictionary(grouping: filtered) { $0.ownerApp ?? "ungrouped" }
+            .map { (key: $0.key, items: $0.value) }
+            .sorted { lhs, rhs in
+                lhs.items.reduce(0) { $0 + $1.bytes } > rhs.items.reduce(0) { $0 + $1.bytes }
+            }
+    }
+
+    private var duplicateGroupList: some View {
+        VStack(spacing: 12) {
+            ForEach(duplicateGroups, id: \.key) { group in
+                DuplicateGroupHeader(
+                    hashPrefix: group.key,
+                    items: group.items,
+                    selectedCount: group.items.filter { session.selected.contains($0.id) }.count,
+                    onToggleCopies: { toggleDuplicateCopies(group.items) })
+                ForEach(Array(group.items.enumerated()), id: \.element.id) { index, item in
+                    resultCard(item: item, index: index)
+                }
+            }
+        }
+    }
+
+    /// The duplicate group gesture deliberately differs from the orphan one:
+    /// it never touches the suggested-keep copy, so "select the group" can't
+    /// silently mean "delete every copy of this file".
+    private func toggleDuplicateCopies(_ groupItems: [ScannedItem]) {
+        let copyIDs = Set(groupItems.filter { !$0.suggestedKeep }.map(\.id))
+        if copyIDs.isSubset(of: session.selected) { session.selected.subtract(copyIDs) }
+        else { session.selected.formUnion(copyIDs) }
     }
 
     private var summary: some View {
@@ -466,6 +511,7 @@ struct ScanView: View {
                 case .orphanScan: return UninstallEngine.scanOrphans()
                 case .largeFiles: return LargeFileEngine.scan(mode: scanMode)
                 case .clutter: return ClutterEngine.scan()
+                case .duplicates: return DuplicateEngine.scan(mode: scanMode)
                 case .appUninstaller: return [] // routed to UninstallView, never here
                 }
             }
@@ -556,6 +602,42 @@ private struct OrphanGroupHeader: View {
             }
             Spacer()
             Text("\(items.count) file\(items.count == 1 ? "" : "s") · \(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+        }
+        .padding(.horizontal, 6)
+        .padding(.top, 10)
+    }
+}
+
+/// Header for one byte-identical duplicate group. The toggle selects only the
+/// non-keep copies — see toggleDuplicateCopies for why.
+private struct DuplicateGroupHeader: View {
+    let hashPrefix: String     // content-hash prefix — the auditable group key
+    let items: [ScannedItem]
+    let selectedCount: Int
+    let onToggleCopies: () -> Void
+
+    private var copies: [ScannedItem] { items.filter { !$0.suggestedKeep } }
+    private var copyBytes: Int64 { copies.reduce(0) { $0 + $1.bytes } }
+    private var title: String { items.first(where: \.suggestedKeep)?.name ?? items.first?.name ?? "Duplicates" }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button(action: onToggleCopies) {
+                Image(systemName: selectedCount >= copies.count && !copies.isEmpty ? "checkmark.circle.fill"
+                                  : selectedCount > 0 ? "minus.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundStyle(selectedCount > 0 ? Theme.primary : Theme.textTertiary)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("\(selectedCount >= copies.count && !copies.isEmpty ? "Deselect" : "Select") all extra copies of \(title)")
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
+                Text("sha256 \(hashPrefix)… — \(items.count) byte-identical copies")
+                    .font(Typo.mono).foregroundStyle(Theme.textTertiary)
+            }
+            Spacer()
+            Text("\(copies.count) extra cop\(copies.count == 1 ? "y" : "ies") · \(ByteCountFormatter.string(fromByteCount: copyBytes, countStyle: .file))")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
         }
         .padding(.horizontal, 6)
