@@ -21,13 +21,15 @@ struct CleanitupApp: App {
 
     /// One-shot guard: macOS state restoration has been observed (once, on a
     /// 27.0 beta) restoring the window at ~108x101pt despite minWidth/minHeight
-    /// + .contentMinSize. If the restored frame is below the minimum, snap the
-    /// content back to the default size. Cheap insurance against an OS race.
+    /// + .contentMinSize. If the restored CONTENT is below the minimum, snap it
+    /// back to the default size. Compares content-to-content (frame includes
+    /// the title bar, so a window exactly at minimum is left alone).
     private static func clampRestoredWindow() {
         DispatchQueue.main.async {
             guard let window = NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first
             else { return }
-            if window.frame.width < 760 || window.frame.height < 480 {
+            let content = window.contentRect(forFrameRect: window.frame).size
+            if content.width < 760 || content.height < 480 {
                 window.setContentSize(NSSize(width: 900, height: 560))
             }
         }

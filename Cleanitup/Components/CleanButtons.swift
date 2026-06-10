@@ -3,15 +3,17 @@ import SwiftUI
 /// Buttons & inputs (DESIGN §7.3, §7.5). All reuse the DesignSystem `Theme`
 /// tokens, the §4.3 accent glow (`.shadowGlow`), and the signature spring press.
 ///
-/// Note: `ButtonStyle` structs don't receive the SwiftUI environment, so press
-/// feedback uses the spring unconditionally (a momentary scale, not an enter/exit
-/// transition — outside the §5.4 reduce-motion mandate, which targets
-/// appear/disappear and looping motion).
+/// Note: press feedback uses the spring unconditionally (a momentary scale, not
+/// an enter/exit transition — outside the §5.4 reduce-motion mandate, which
+/// targets appear/disappear and looping motion). Both button styles read
+/// `\.isEnabled` and dim when disabled so a non-tappable button looks the part.
 
 // MARK: - Primary button (§7.3)
 
 /// Gradient emerald fill + accent glow, springy `scale(0.96)` press.
 struct PrimaryButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.headline.weight(.semibold))
@@ -25,8 +27,10 @@ struct PrimaryButtonStyle: ButtonStyle {
                 ),
                 in: RoundedRectangle(cornerRadius: Theme.radiusLg, style: .continuous)
             )
-            .shadowGlow(Theme.primary, radius: configuration.isPressed ? 10 : 16, strength: 0.45)
+            .shadowGlow(Theme.primary, radius: configuration.isPressed ? 10 : 16,
+                        strength: isEnabled ? 0.45 : 0)
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(isEnabled ? 1 : 0.45)
             .animation(Theme.spring, value: configuration.isPressed)
     }
 }
@@ -35,16 +39,19 @@ struct PrimaryButtonStyle: ButtonStyle {
 
 /// Frosted glass fill, hairline edge, same radius + spring press.
 struct GlassButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
     func makeBody(configuration: Configuration) -> some View {
         let shape = RoundedRectangle(cornerRadius: Theme.radiusLg, style: .continuous)
         return configuration.label
             .font(.headline.weight(.medium))
-            .foregroundStyle(Theme.textPrimary)
+            .foregroundStyle(isEnabled ? Theme.textPrimary : Theme.textTertiary)
             .padding(.horizontal, 20)
             .padding(.vertical, 11)
             .background(.ultraThinMaterial, in: shape)
             .overlay(shape.strokeBorder(Color.white.opacity(0.14), lineWidth: 1))
             .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .opacity(isEnabled ? 1 : 0.55)
             .animation(Theme.spring, value: configuration.isPressed)
     }
 }
