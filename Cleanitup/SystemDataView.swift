@@ -47,6 +47,7 @@ private let systemDataSide: [String: SystemDataInfo] = [
 
 struct SystemDataView: View {
     let store: StatsStore
+    @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
     /// nil = still listing; populated = the tmutil report (A3, report-only).
     @State private var snapshotReport: SnapshotReport?
 
@@ -94,9 +95,10 @@ struct SystemDataView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         // Same idempotent pattern as DashboardView: reuse the app-scoped
-        // measurement; only start one if nothing has ever run.
+        // measurement; only start one if nothing has ever run — and never
+        // before the one-time permission moment has finished.
         .task {
-            if store.snapshot == nil { store.refresh() }
+            if store.snapshot == nil && permissionFlowCompleted { store.refresh() }
             if snapshotReport == nil {
                 snapshotReport = await Task.detached(priority: .utility) {
                     SnapshotEngine.listLocalSnapshots()

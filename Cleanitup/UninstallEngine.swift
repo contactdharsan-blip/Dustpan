@@ -16,6 +16,11 @@ struct InstalledApp: Identifiable, Hashable {
     let bundleID: String?   // nil for malformed bundles (still listed, honestly)
     let url: URL
     let lastUsed: Date?     // content access date of the bundle — a hint, not truth
+    let isAppStore: Bool    // has Contents/_MASReceipt/receipt — installed by the App Store
+    /// Bundle owned by root (App Store / root installer): a user-level trash is
+    /// refused by macOS, and Cleanitup never escalates — so the bundle itself
+    /// can't be removed here, only its leftovers.
+    let needsAdminToDelete: Bool
 
     var isInUserApplications: Bool { url.path.hasPrefix(FileManager.default.homeDirectoryForCurrentUser.path) }
 }
@@ -69,12 +74,15 @@ enum UninstallEngine {
                 if Task.isCancelled { return apps }
                 let values = try? url.resourceValues(forKeys: [.contentAccessDateKey, .isSymbolicLinkKey])
                 if values?.isSymbolicLink == true { continue } // links (e.g. brew) — not the real bundle
+                let receipt = url.appendingPathComponent("Contents/_MASReceipt/receipt")
                 apps.append(InstalledApp(
                     id: url.path,
                     name: url.deletingPathExtension().lastPathComponent,
                     bundleID: Bundle(url: url)?.bundleIdentifier,
                     url: url,
-                    lastUsed: values?.contentAccessDate))
+                    lastUsed: values?.contentAccessDate,
+                    isAppStore: fm.fileExists(atPath: receipt.path),
+                    needsAdminToDelete: SafeDeleteEngine.ownedByAnotherUser(url.path)))
             }
         }
         return apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
@@ -93,11 +101,16 @@ enum UninstallEngine {
         let home = FileManager.default.homeDirectoryForCurrentUser
         var items: [ScannedItem] = []
 
-        // The bundle itself — Safe: the user explicitly chose this app.
-        let bundleBytes = SafeDeleteEngine.size(of: app.url)
-        items.append(ScannedItem(
-            name: "\(app.name).app", url: app.url, bytes: bundleBytes, risk: .safe,
-            detail: "The application bundle itself." + provenance(of: app.url)))
+        // The bundle itself — Safe: the user explicitly chose this app. Skipped
+        // when root-owned (App Store / root installer): macOS refuses a user-level
+        // trash and Cleanitup never escalates, so offering the row would be a lie.
+        // The view explains and points to Launchpad/Finder; leftovers still listed.
+        if !app.needsAdminToDelete {
+            let bundleBytes = SafeDeleteEngine.size(of: app.url)
+            items.append(ScannedItem(
+                name: "\(app.name).app", url: app.url, bytes: bundleBytes, risk: .safe,
+                detail: "The application bundle itself." + provenance(of: app.url)))
+        }
 
         for root in leftoverRoots {
             if Task.isCancelled { break }
@@ -201,7 +214,8 @@ enum UninstallEngine {
                     name: "\(area) — \(child.lastPathComponent)",
                     url: child, bytes: bytes, risk: .caution,
                     detail: "Looks owned by “\(candidate)” — no installed app matches that vendor."
-                            + provenance(of: child)))
+                            + provenance(of: child),
+                    ownerApp: vendorPrefix(of: candidate)))
             }
         }
         return items.sorted { $0.bytes > $1.bytes }
@@ -226,6 +240,14 @@ enum UninstallEngine {
     /// First two reverse-DNS components: "com.spotify.client" → "com.spotify".
     private static func vendorPrefix(of bundleID: String) -> String {
         bundleID.split(separator: ".").prefix(2).joined(separator: ".")
+    }
+
+    /// "com.spotify" → "Spotify" — display title for an orphan group. Vendor
+    /// level because the orphan inference itself runs at the vendor level; the
+    /// raw prefix is always shown alongside so the guess stays auditable.
+    static func vendorDisplayName(_ prefix: String) -> String {
+        guard let vendor = prefix.split(separator: ".").last, !vendor.isEmpty else { return prefix }
+        return vendor.prefix(1).uppercased() + vendor.dropFirst()
     }
 
     // MARK: A4 provenance

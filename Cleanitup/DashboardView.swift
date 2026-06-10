@@ -46,6 +46,7 @@ import Observation
 struct DashboardView: View {
     let store: StatsStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
 
     private var snapshot: StatsSnapshot? { store.snapshot }
 
@@ -68,8 +69,10 @@ struct DashboardView: View {
         }
         // Idempotent across re-appearances: only kick off a measurement when the
         // app-scoped store has none yet — sidebar round-trips reuse the snapshot.
+        // The very first scan waits for the one-time permission moment instead;
+        // ContentView's sheet onDismiss starts it.
         .task {
-            if store.snapshot == nil { store.refresh() }
+            if store.snapshot == nil && permissionFlowCompleted { store.refresh() }
         }
     }
 
@@ -498,8 +501,9 @@ private struct BreakdownCard: View {
 
 /// "Needs permission" pill that deep-links to Privacy & Security → Full Disk
 /// Access. Calm affordance, not an alarm: the row already shows an honest
-/// "—" / "≥" instead of a fake number.
-private struct PermissionBadgeButton: View {
+/// "—" / "≥" instead of a fake number. Internal (not private) so the one-time
+/// PermissionGateView reuses the same Settings deep-link.
+struct PermissionBadgeButton: View {
     static func openFullDiskAccessSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles") {
             NSWorkspace.shared.open(url)

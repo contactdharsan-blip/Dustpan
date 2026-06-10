@@ -185,6 +185,9 @@ enum StatsEngine {
     /// This way every non-gated bucket resolves progressively while the user
     /// decides; expect up to three sequential prompts at the tail. Order does not
     /// affect disjointness — exclusions are by top-level name, not position.
+    /// Since the one-time PermissionGateView, these dialogs are normally already
+    /// answered before any scan; the ordering stays for the Skip path, where
+    /// they still fire here at the tail.
     static let categories: [StorageCategory] = [
         StorageCategory(id: "music",     name: "Music",     systemImage: "music.note",             roots: ["~/Music"]),
         StorageCategory(id: "movies",    name: "Movies",    systemImage: "film",                   roots: ["~/Movies"]),
