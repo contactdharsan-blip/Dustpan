@@ -35,6 +35,7 @@ ExportOptions.plist
 # Editor noise
 .idea/
 .vscode/
+.claude/settings.local.json
 
 # Internal planning notes (kept local; PRD.md at root is the public artifact)
 tasks/

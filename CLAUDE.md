@@ -10,7 +10,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`Cleanitup` — TODO: one sentence on what this does. (No code exists here yet.)
+`Cleanitup` — a free, open-source, trust-first macOS storage cleaner (SwiftUI, GPL-3.0,
+not sandboxed): real measurements or an em-dash, Trash-only deletion behind a safety gate.
 
 ---
 
@@ -75,7 +76,6 @@ Apply these on every task, before and while writing code.
   unions); never use `any` without explicit approval.
 - Descriptive names. Small, focused functions. Tests for new functionality.
 - Handle errors explicitly — never swallow them.
-- TODO: pin language/formatter specifics once the stack is chosen.
 
 ## Things Claude should NOT do
 - Don't skip error handling or commit without passing tests.
@@ -85,14 +85,9 @@ Apply these on every task, before and while writing code.
 
 ## Commands
 
-TODO — fill once tooling exists; keep only commands you actually run:
-
 ```sh
-# typecheck   TODO
-# test        TODO
-# test (one)  TODO   ← add the single-test command early
-# lint        TODO
-# format      TODO
+# build (also the typecheck)
+xcodebuild -project Cleanitup.xcodeproj -scheme Cleanitup -configuration Debug build
 ```
 
 ---

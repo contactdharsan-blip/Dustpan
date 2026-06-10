@@ -2,14 +2,21 @@
 
 **A free, open-source, transparent macOS storage cleaner.**
 
+![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
+![Platform: macOS 14+](https://img.shields.io/badge/Platform-macOS%2014%2B-lightgrey.svg)
+
 Cleanitup shows you every file before it touches anything, moves things to the
 Trash (never `rm`), and only cleans what genuinely reclaims space — app
 leftovers, large files, and developer caches. No subscription, no upsell, no
 telemetry, and you can read every line that touches your disk.
 
-> **Status:** early scaffold (v0.1). The app shell builds and runs today; the
-> cleaning engines are being built per the [roadmap](#roadmap). This repo is
-> public so you can follow along, audit it, and contribute.
+> **Status:** working core. The **Overview** dashboard measures your real disk
+> across 20 disjoint categories (every number measured or shown as "—", with an
+> honest unitemized remainder); `SafeDeleteEngine` gates all deletion behind a
+> home-only `verdict()` safety check and only ever moves items to the Trash; and
+> **Developer Caches** runs a real Quick/Deep scan with preview, risk labels,
+> and confirm-before-Trash. The other categories are design previews with
+> clearly-labeled sample data, being built per the [roadmap](#roadmap).
 
 ---
 
@@ -66,15 +73,22 @@ the Mac App Store, because Full Disk Access is incompatible with the App Sandbox
 ## Project layout
 
 ```
-Cleanitup.xcodeproj      # Xcode project (file-system-synchronized groups)
-Cleanitup/               # app sources
-  CleanitupApp.swift      # @main entry point
-  ContentView.swift       # sidebar + category detail + safety banner
-  Cleanitup.entitlements  # intentionally NOT sandboxed (needs Full Disk Access)
+Cleanitup.xcodeproj       # Xcode project (file-system-synchronized groups)
+Cleanitup/                # app sources
+  CleanitupApp.swift       # @main entry point
+  ContentView.swift        # sidebar + scan flow (preview → confirm → Trash)
+  DashboardView.swift      # storage Overview (live measurements, honest "—"s)
+  StatsEngine.swift        # 20 disjoint disk categories, progressive snapshots
+  SafeDeleteEngine.swift   # safety gate, sizing, scans, Trash-only deletion
+  DesignSystem.swift       # theme tokens + glass-card styling
+  Components/              # reusable UI (buttons, mode switcher, feedback kit)
+  Cleanitup.entitlements   # intentionally NOT sandboxed (needs Full Disk Access)
   Assets.xcassets/
-PRD.md                   # product requirements & competitive research
-tasks/                   # planning notes + raw research output
+PRD.md                    # product requirements & competitive research
 ```
+
+(Planning notes live in a local `tasks/` directory that is gitignored — it
+won't exist in a clone.)
 
 ## Contributing
 
