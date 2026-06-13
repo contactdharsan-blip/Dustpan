@@ -98,6 +98,11 @@ swiftc -o /tmp/t/run Dustpan/<Engine>.swift Dustpan/SafeDeleteEngine.swift \
 
 # verify a running build (kill stale instances first)
 pkill -x Dustpan
+
+# build the CLI (third presentation layer over the same engines; swiftc, no
+# xcodeproj target). Universal by default; --thin for a fast host-arch build.
+scripts/build-cli.sh            # → dist/dustpan (arm64+x86_64, gitignored)
+dist/dustpan help               # scriptable parity: scan/caches/duplicates/…/trash/restore (--json)
 ```
 
 ## Architecture
@@ -120,6 +125,12 @@ Two strict layers, one rule: **every number is a real measurement or an em-dash.
   scans survive sidebar switches) and only reach engines via `Task.detached`
   read-only report calls. One measurement run feeds Overview, System Data, and
   Disk Map — never a second scan.
+- **CLI** (`cli/main.swift`, built by `scripts/build-cli.sh`) is a third
+  presentation layer over the same engines — read-only report verbs plus
+  `trash`/`restore`, which route through `SafeDeleteEngine.moveToTrash` +
+  `UndoJournal` so verdict()-gating and the audit journal hold identically.
+  `scan` consumes the same frozen `StatsEngine.live()` AsyncStream the dashboard
+  does, so GUI and CLI numbers can't diverge. `--json` for CI/cron.
 - **Safety invariants** (don't weaken): all deletion via `SafeDeleteEngine
   .moveToTrash` behind `verdict()` (home-only + one documented /Applications
   uninstall carve-out; root-owned bundles delegate to Finder via Apple Events,

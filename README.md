@@ -59,6 +59,32 @@ Prefer the command line?
 xcodebuild -scheme Dustpan -configuration Debug build
 ```
 
+## Command-line interface
+
+The engines are Foundation-only, so the same cleaner runs headless — useful for
+CI, cron, or "I'll just script it" workflows. Build it with `scripts/build-cli.sh`
+(universal `arm64+x86_64`; `--thin` for a fast host-arch build):
+
+```sh
+dustpan scan                 # disk, categories, cleanliness, reclaimable summary
+dustpan caches --deep        # reclaimable developer/app caches
+dustpan duplicates           # byte-identical duplicate groups
+dustpan large --deep         # large files
+dustpan apps / orphans       # installed apps · leftover files
+dustpan login-items          # launchd login items (report-only)
+dustpan history              # the Trash audit journal
+
+dustpan trash <path>...      # move to Trash — verdict()-gated, journaled, reversible
+dustpan restore <id>         # put a trashed item back (id from `history`)
+
+dustpan scan --json          # machine-readable output for any command
+```
+
+`scan` consumes the exact same measurement stream the GUI dashboard does, so the
+numbers can't diverge. Denied paths print `—`, never a fake `0`. The only verbs
+that touch disk are `trash`/`restore`, and both route through the same Trash-only
+safety gate as the app — nothing is ever permanently deleted.
+
 ## Roadmap
 
 | Milestone | Scope |
@@ -84,6 +110,8 @@ Dustpan/                # app sources
   Components/              # reusable UI (buttons, mode switcher, feedback kit)
   Dustpan.entitlements   # intentionally NOT sandboxed (needs Full Disk Access)
   Assets.xcassets/
+cli/main.swift            # scriptable CLI over the same engines (no xcodeproj target)
+scripts/build-cli.sh      # swiftc build → dist/dustpan (universal)
 PRD.md                    # product requirements & competitive research
 ```
 
