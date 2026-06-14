@@ -118,6 +118,9 @@ Two strict layers, one rule: **every number is a real measurement or an em-dash.
   byte-identical only; hard-link-aware; suggested-keep never pre-selected),
   `LoginItemsEngine` (launchd jobs in plain language, report-only),
   `SnapshotEngine` (tmutil, report-only),
+  `DockerReclaimEngine` (Docker/colima/Podman VM disk images; apparent vs
+  on-disk allocated size, sparse-gap detection, report-only — pruning never
+  shrinks a .raw, so no delete button),
   `DiagnosticsEngine` (Photos/Mail, report-only), `UndoJournal` (JSONL audit log;
   every trash attempt recorded at engine level — call sites can't forget).
 - **Views** are presentation-only: they consume app-scoped `@Observable` stores/
