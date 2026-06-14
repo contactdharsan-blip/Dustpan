@@ -1,0 +1,5 @@
+[
+  { "name": "Maven repository", "path": ".m2/repository", "risk": "caution", "detail": "Artifacts re-downloaded on the next build" },
+  { "name": "NuGet packages", "path": ".nuget/packages", "risk": "caution", "detail": "Restored by dotnet/nuget on the next build" },
+  { "name": "JetBrains IDE caches", "path": "Library/Caches/JetBrains", "risk": "safe", "detail": "Rebuilt by the IDE on next launch" }
+]

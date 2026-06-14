@@ -85,6 +85,31 @@ numbers can't diverge. Denied paths print `—`, never a fake `0`. The only verb
 that touch disk are `trash`/`restore`, and both route through the same Trash-only
 safety gate as the app — nothing is ever permanently deleted.
 
+## Community cleaning rules
+
+Dustpan ships a curated set of reclaimable developer-cache locations, but new
+tools appear and macOS moves cache paths every year. Rather than wait for a
+release, you can add your own: drop a JSON file at
+`~/Library/Application Support/Dustpan/cleaning-rules.json` (see
+[`cleaning-rules.example.json`](cleaning-rules.example.json)):
+
+```json
+[
+  { "name": "Maven repository", "path": ".m2/repository", "risk": "caution", "detail": "Re-downloaded on next build" }
+]
+```
+
+`path` is home-relative; `risk` is `safe` (regenerates automatically) or
+`caution` (real cost to rebuild). Your rules layer on top of the built-ins —
+matching a built-in path relabels it, a new path adds it. Run `dustpan rules`
+to see the effective set.
+
+**Why this is safe:** a manifest only contributes home-relative paths to a
+*read-only* scan. Every deletion still passes the same `verdict()` gate, which
+blocks anything outside your home folder or under a system path — so no rule,
+even a malicious one, can make Dustpan touch something it shouldn't. Absolute
+paths and `..` escapes are rejected at load time as defense in depth.
+
 ## Roadmap
 
 | Milestone | Scope |
@@ -112,6 +137,7 @@ Dustpan/                # app sources
   Assets.xcassets/
 cli/main.swift            # scriptable CLI over the same engines (no xcodeproj target)
 scripts/build-cli.sh      # swiftc build → dist/dustpan (universal)
+cleaning-rules.example.json # template for community-editable cache rules
 PRD.md                    # product requirements & competitive research
 ```
 

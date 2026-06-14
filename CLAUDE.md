@@ -111,7 +111,11 @@ Two strict layers, one rule: **every number is a real measurement or an em-dash.
 
 - **Engines** (Foundation-only, no SwiftUI, harness-testable): `SafeDeleteEngine`
   (verdict() safety gate, honest SizeReport with —/≥ denial semantics, Trash-only
-  deletion, reclaimable-location scan), `StatsEngine` (20 disjoint disk categories,
+  deletion, reclaimable-location scan + community-editable cleaning-rules
+  manifest at ~/Library/Application Support/Dustpan/cleaning-rules.json —
+  built-in defaults layered with sanitized user rules; safe because manifests
+  only add home-relative paths to a read-only scan, verdict() still gates every
+  delete), `StatsEngine` (20 disjoint disk categories,
   frozen AsyncStream snapshot contract — see its header), `UninstallEngine`
   (apps + leftovers + orphans), `LargeFileEngine`, `ClutterEngine` (installers/
   screenshots, age-sorted), `DuplicateEngine` (size → partial-hash → full-SHA256,

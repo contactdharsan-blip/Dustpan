@@ -269,6 +269,40 @@ func cmdLoginItems() {
     }
 }
 
+func cmdRules() {
+    let url = SafeDeleteEngine.cleaningRulesURL
+    let userRules = SafeDeleteEngine.userCleaningRules()
+    let effective = SafeDeleteEngine.reclaimableSpecs()
+    if jsonMode {
+        emitJSON([
+            "manifestPath": url.path,
+            "manifestExists": FileManager.default.fileExists(atPath: url.path),
+            "userRuleCount": userRules.count,
+            "effectiveRuleCount": effective.count,
+            "userRules": userRules.map { ["name": $0.name, "path": $0.relativePath,
+                                          "risk": $0.risk == .safe ? "safe" : "caution"] },
+        ])
+        return
+    }
+    line("Cleaning rules — built-in defaults plus your community manifest.")
+    line("")
+    line("Manifest: \(url.path)")
+    line(FileManager.default.fileExists(atPath: url.path)
+         ? "  (present — \(userRules.count) valid user rule(s) layered on top)"
+         : "  (none yet — copy cleaning-rules.example.json there to add your own)")
+    line("Effective rules: \(effective.count)  (\(effective.count - userRules.count) built-in + \(userRules.count) user)")
+    if !userRules.isEmpty {
+        line("")
+        line("Your rules:")
+        for r in userRules {
+            line("  • \(r.name) — ~/\(r.relativePath)  [\(r.risk == .safe ? "safe" : "caution")]")
+        }
+    }
+    line("")
+    line("Schema: a JSON array of { name, path (home-relative), risk: \"safe\"|\"caution\", detail }.")
+    line("Paths outside home or containing \"..\" are rejected; every delete still passes the safety gate.")
+}
+
 func cmdDocker() {
     let images = DockerReclaimEngine.scan()
     if jsonMode {
@@ -414,6 +448,7 @@ func cmdHelp() {
       login-items     launchd login items & background jobs
       snapshots       Local Time Machine snapshots
       history         Trash audit journal
+      rules           Show cleaning rules (built-in + your community manifest)
 
     ACT (Trash-only, reversible, verdict()-gated + journaled):
       trash <path>... Move paths to the Trash         (--yes to skip prompt)
@@ -438,6 +473,7 @@ case "duplicates", "dupes": cmdDuplicates()
 case "large":              cmdLarge()
 case "clutter":            cmdClutter()
 case "docker":             cmdDocker()
+case "rules":              cmdRules()
 case "apps":               cmdApps()
 case "orphans":            cmdOrphans()
 case "login-items":        cmdLoginItems()
