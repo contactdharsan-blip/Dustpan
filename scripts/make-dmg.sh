@@ -41,10 +41,28 @@ if [ -n "$IDENTITY" ]; then
   codesign --force --deep --options runtime --sign "$IDENTITY" "$APP"
   codesign --verify --strict "$APP" && echo "    signature verified"
 else
-  echo "==> NO Developer ID Application certificate found."
-  echo "    Producing an UNSIGNED dmg for local testing only — Gatekeeper"
-  echo "    will block it on other Macs. Get a Developer ID cert from your"
-  echo "    Apple Developer account, then re-run."
+  echo "==> NO 'Developer ID Application' certificate found."
+  # Distinguish "no Apple account set up" from "dev certs present but not the
+  # distribution kind" — the latter is the common, confusing case.
+  DEVCERTS=$(security find-identity -v -p codesigning 2>/dev/null \
+    | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p')
+  if [ -n "$DEVCERTS" ]; then
+    echo "    You DO have Apple Development cert(s):"
+    echo "$DEVCERTS" | sed 's/^/      - /'
+    echo "    but those only sign for YOUR registered devices during debugging —"
+    echo "    Gatekeeper rejects them on other Macs. Distribution needs a separate"
+    echo "    'Developer ID Application' cert (paid Apple Developer Program, created"
+    echo "    by the team's Account Holder):"
+    echo "      Xcode > Settings > Accounts > <team> > Manage Certificates > +"
+    echo "        > 'Developer ID Application'  (installs cert+key into login keychain)"
+    echo "    Then notarize:  xcrun notarytool store-credentials <profile> \\"
+    echo "        --apple-id <email> --team-id <TEAMID> --password <app-specific-pw>"
+    echo "      and re-run:  NOTARY_PROFILE=<profile> $0"
+  else
+    echo "    No Apple signing identity at all. Set up an Apple Developer account,"
+    echo "    add it in Xcode > Settings > Accounts, then create the cert as above."
+  fi
+  echo "    Producing an UNSIGNED dmg for LOCAL TESTING ONLY for now."
 fi
 
 echo "==> Creating $DMG"
