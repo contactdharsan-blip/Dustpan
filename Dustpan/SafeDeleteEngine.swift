@@ -353,7 +353,7 @@ enum SafeDeleteEngine {
     ///         caches, simulator devices, Xcode archives, node_modules).
     enum ScanMode { case quick, deep }
 
-    private struct CacheSpec {
+    struct CacheSpec {
         let name: String, relativePath: String, risk: CleanRisk, detail: String
     }
 
@@ -408,12 +408,92 @@ enum SafeDeleteEngine {
               detail: "Deletes all containers/images/volumes; quit Docker Desktop first. `docker system prune` is the in-place alternative"),
     ]
 
-    /// ~/Library/Caches subdirectory names already covered by a quick spec —
-    /// deep discovery must skip these so nothing is listed twice.
-    private static let specCoveredCacheNames: Set<String> = [
-        "Homebrew", "Yarn", "pip", "CocoaPods", "org.swift.swiftpm",
-        "ms-playwright", "ms-playwright-go", "deno", "go-build",
-    ]
+    // MARK: Community-editable cleaning rules (v1.1)
+    //
+    // `quickSpecs` above is the guaranteed built-in baseline. Users and the
+    // community can ADD or relabel rules via an optional JSON manifest at
+    // ~/Library/Application Support/Dustpan/cleaning-rules.json — so a new
+    // tool's cache becomes cleanable without recompiling, surviving macOS's
+    // yearly path churn (the PRD's path-drift risk).
+    //
+    // SAFETY: a manifest only contributes home-relative paths to a READ-ONLY
+    // scan. Every deletion still passes verdict(), which blocks anything outside
+    // home or under a system root (symlinks resolved first) — so no manifest,
+    // however hostile, can widen what Dustpan is able to delete. Entries are
+    // sanitized on load (no absolute paths, no "~", no ".." escapes; risk must
+    // be exactly "safe" or "caution") and malformed rules are dropped, never
+    // guessed at. Absent manifest ⇒ behaviour is byte-identical to the built-ins.
+
+    /// One rule as it appears in the JSON manifest:
+    /// `{ "name": "...", "path": "Library/Caches/...", "risk": "safe"|"caution", "detail": "..." }`
+    private struct RuleDTO: Decodable {
+        let name: String
+        let path: String
+        let risk: String
+        let detail: String?
+
+        /// Validate + sanitize into a CacheSpec, or nil if the rule is unsafe
+        /// or malformed. The home-relative + no-".." checks keep a read-only
+        /// scan from ever reaching outside home (verdict() is the delete-time
+        /// backstop; this is defense in depth at list time).
+        func sanitized() -> CacheSpec? {
+            let p = path.trimmingCharacters(in: .whitespaces)
+            guard !name.trimmingCharacters(in: .whitespaces).isEmpty,
+                  !p.isEmpty, !p.hasPrefix("/"), !p.hasPrefix("~"),
+                  !p.split(separator: "/").contains("..") else { return nil }
+            let r: CleanRisk
+            switch risk {
+            case "safe":    r = .safe
+            case "caution": r = .caution
+            default:        return nil   // unknown risk → reject, never assume
+            }
+            return CacheSpec(name: name, relativePath: p, risk: r, detail: detail ?? "")
+        }
+    }
+
+    /// The optional user/community manifest. Absent ⇒ built-ins are the whole list.
+    static var cleaningRulesURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Dustpan", isDirectory: true)
+            .appendingPathComponent("cleaning-rules.json")
+    }
+
+    /// Valid, sanitized rules from a manifest (default: the user's). Unreadable
+    /// or absent → empty; a malformed file degrades to the built-ins, it never
+    /// throws. `url` is injectable for testing.
+    static func userCleaningRules(from url: URL = cleaningRulesURL) -> [CacheSpec] {
+        guard let data = try? Data(contentsOf: url),
+              let raw = try? JSONDecoder().decode([RuleDTO].self, from: data) else { return [] }
+        return raw.compactMap { $0.sanitized() }
+    }
+
+    /// Built-in defaults with user rules layered on top: a user rule whose path
+    /// matches a built-in REPLACES it (a community relabel/correction); a new
+    /// path is appended. Built-ins stay first and in order.
+    static func reclaimableSpecs(userRulesAt url: URL = cleaningRulesURL) -> [CacheSpec] {
+        var specs = quickSpecs
+        for rule in userCleaningRules(from: url) {
+            if let i = specs.firstIndex(where: { $0.relativePath == rule.relativePath }) {
+                specs[i] = rule
+            } else {
+                specs.append(rule)
+            }
+        }
+        return specs
+    }
+
+    /// ~/Library/Caches subdirectory names already covered by a reclaimable spec
+    /// (built-in OR user) — deep discovery skips these so nothing is listed
+    /// twice. Derived from the spec paths, so community rules under
+    /// Library/Caches auto-dedupe against deep discovery as well.
+    static var specCoveredCacheNames: Set<String> {
+        let prefix = "Library/Caches/"
+        return Set(reclaimableSpecs().compactMap { spec -> String? in
+            guard spec.relativePath.hasPrefix(prefix) else { return nil }
+            let rest = String(spec.relativePath.dropFirst(prefix.count))
+            return rest.contains("/") ? nil : rest   // direct children of Caches only
+        })
+    }
 
     /// Absolute paths of every known reclaimable location. The orphan scan uses
     /// this to EXCLUDE them: a known cache (often CLI-owned, e.g. SwiftPM) is
@@ -421,7 +501,7 @@ enum SafeDeleteEngine {
     /// listing it twice would double-count reclaimable bytes across categories.
     static var knownReclaimablePaths: Set<String> {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return Set(quickSpecs.map { home.appendingPathComponent($0.relativePath).path })
+        return Set(reclaimableSpecs().map { home.appendingPathComponent($0.relativePath).path })
     }
 
     /// Scan reclaimable locations, read-only (discovers and measures, deletes
@@ -429,7 +509,7 @@ enum SafeDeleteEngine {
     /// gate keeps holding for anything the user later confirms.
     static func scanReclaimable(mode: ScanMode) -> [ScannedItem] {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        var items: [ScannedItem] = quickSpecs.compactMap { spec in
+        var items: [ScannedItem] = reclaimableSpecs().compactMap { spec in
             let url = home.appendingPathComponent(spec.relativePath)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             let bytes = size(of: url)
