@@ -138,6 +138,8 @@ Dustpan/                # app sources
 cli/main.swift            # scriptable CLI over the same engines (no xcodeproj target)
 scripts/build-cli.sh      # swiftc build → dist/dustpan (universal)
 cleaning-rules.example.json # template for community-editable cache rules
+Casks/dustpan.rb          # Homebrew Cask, ready to submit once the DMG is notarized
+scripts/update-cask.sh    # refresh the Cask's version + sha256 from a built DMG
 PRD.md                    # product requirements & competitive research
 ```
 
