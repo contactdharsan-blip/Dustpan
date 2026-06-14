@@ -269,6 +269,35 @@ func cmdLoginItems() {
     }
 }
 
+func cmdDocker() {
+    let images = DockerReclaimEngine.scan()
+    if jsonMode {
+        emitJSON([
+            "vmImages": images.map { v -> [String: Any] in
+                [
+                    "runtime": v.runtime, "path": v.url.path,
+                    "onDiskBytes": v.onDiskBytes, "onDiskText": v.onDiskText,
+                    "apparentBytes": v.apparentBytes, "apparentText": v.apparentText,
+                    "sparse": v.isSparse, "denied": v.denied,
+                    "blessedFix": v.blessedFix,
+                ]
+            },
+            "count": images.count,
+        ])
+        return
+    }
+    line("Container VM disk images (report-only — pruning won't shrink these):")
+    if images.isEmpty {
+        line("  (no Docker/colima/Podman VM image in the default locations)")
+        return
+    }
+    for v in images {
+        line("  • \(v.runtime): \(v.onDiskText) on disk  (of \(v.apparentText) max)\(v.isSparse ? "  ⚠ has dead space — won't auto-shrink" : "")")
+        line("      \(v.url.path)")
+        line("      fix: \(v.blessedFix)")
+    }
+}
+
 func cmdSnapshots() {
     let r = SnapshotEngine.listLocalSnapshots()
     if jsonMode {
@@ -379,6 +408,7 @@ func cmdHelp() {
       duplicates      Byte-identical duplicate file groups     [--deep]
       large           Large files                              [--deep]
       clutter         Installers & screenshots (age-sorted)
+      docker          Container VM disk images (Docker/colima/Podman)
       apps            Installed applications
       orphans         Leftover files from already-removed apps
       login-items     launchd login items & background jobs
@@ -407,6 +437,7 @@ case "caches":             cmdCaches()
 case "duplicates", "dupes": cmdDuplicates()
 case "large":              cmdLarge()
 case "clutter":            cmdClutter()
+case "docker":             cmdDocker()
 case "apps":               cmdApps()
 case "orphans":            cmdOrphans()
 case "login-items":        cmdLoginItems()

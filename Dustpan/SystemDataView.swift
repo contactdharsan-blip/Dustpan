@@ -52,6 +52,9 @@ struct SystemDataView: View {
     @State private var snapshotReport: SnapshotReport?
     /// nil = still measuring; populated = A5 Photos/Mail diagnostics (report-only).
     @State private var diagnostics: [MediaDiagnostic]?
+    /// nil = not yet scanned; populated = container VM disk images (v1.1, report-only).
+    /// Stays hidden entirely when empty — most users run no container runtime.
+    @State private var vmImages: [VMDiskImage]?
 
     private var snapshot: StatsSnapshot? { store.snapshot }
 
@@ -91,6 +94,7 @@ struct SystemDataView: View {
                 purgeableCard
                 breakdownCard
                 diagnosticsCard
+                if let vmImages, !vmImages.isEmpty { dockerCard(vmImages) }
                 snapshotsCard
                 divergenceNote
                 Spacer(minLength: 0)
@@ -111,6 +115,11 @@ struct SystemDataView: View {
             if diagnostics == nil {
                 diagnostics = await Task.detached(priority: .utility) {
                     DiagnosticsEngine.photosMailDiagnostics()
+                }.value
+            }
+            if vmImages == nil {
+                vmImages = await Task.detached(priority: .utility) {
+                    DockerReclaimEngine.scan()
                 }.value
             }
         }
@@ -392,6 +401,68 @@ struct SystemDataView: View {
                 .padding(.leading, 30)
                 .fixedSize(horizontal: false, vertical: true)
             Text("The fix Apple supports: \(diag.blessedFix)")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+                .padding(.leading, 30)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 2)
+    }
+
+    // MARK: v1.1 — container VM disk images (report-only)
+
+    /// Docker/colima/Podman back their Linux VM with one sparse disk image that
+    /// `docker prune` frees *inside* but never shrinks on the host. Measured two
+    /// ways (on-disk vs apparent), explained, and pointed at the runtime's own
+    /// compaction — never offered for deletion (it's a live VM disk).
+    private func dockerCard(_ images: [VMDiskImage]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("Container VM disk images").typoLabel()
+                Spacer()
+                PillBadge(text: "report-only", tint: Theme.neutral)
+            }
+            VStack(spacing: 12) {
+                ForEach(images) { vmRow($0) }
+            }
+            Text("These disk images don't shrink when you prune images or containers — the freed space stays allocated to the file until the runtime compacts it. Dustpan measures and explains but never deletes a live VM disk.")
+                .font(.caption).foregroundStyle(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard()
+    }
+
+    private func vmRow(_ vm: VMDiskImage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 12) {
+                Image(systemName: vm.systemImage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.textTertiary)
+                    .frame(width: 18)
+                Text(vm.runtime)
+                    .font(.subheadline)
+                    .foregroundStyle(Theme.textPrimary)
+                    .lineLimit(1)
+                if vm.isSparse {
+                    PillBadge(text: "won't auto-shrink", tint: Theme.warning)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(vm.onDiskText)
+                        .font(.subheadline.weight(.semibold)).monospacedDigit()
+                        .foregroundStyle(Theme.textPrimary)
+                    Text("of \(vm.apparentText) max")
+                        .font(.caption2).monospacedDigit()
+                        .foregroundStyle(Theme.textTertiary)
+                }
+                .frame(minWidth: 90, alignment: .trailing)
+            }
+            Text(vm.explanation)
+                .font(.caption).foregroundStyle(Theme.textTertiary)
+                .padding(.leading, 30)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("The fix: \(vm.blessedFix)")
                 .font(.caption).foregroundStyle(Theme.textSecondary)
                 .padding(.leading, 30)
                 .fixedSize(horizontal: false, vertical: true)

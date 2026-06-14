@@ -22,6 +22,7 @@ ENGINES=(
   "$SRC/DuplicateEngine.swift"
   "$SRC/LargeFileEngine.swift"
   "$SRC/ClutterEngine.swift"
+  "$SRC/DockerReclaimEngine.swift"
   "$SRC/UninstallEngine.swift"
   "$SRC/LoginItemsEngine.swift"
   "$SRC/SnapshotEngine.swift"
