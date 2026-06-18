@@ -43,8 +43,24 @@ enum SafetyVerdict: Equatable {
     case blockedOutsideHome  // outside the user's home directory
     case blockedMissing      // nothing there to delete
     case blockedNeedsAdmin   // root-owned (App Store/installer) — Finder asks for admin auth
+    case blockedExcluded     // inside a user-chosen Protected Folder — hard block, wins over every allow
 
     var isAllowed: Bool { self == .allowed }
+
+    /// Plain-language reason, surfaced to the user wherever a verdict is shown
+    /// (GUI history, CLI preview, journal). Never leak the raw case name.
+    /// Mirrors `RestoreState.explanation`. Exhaustive on purpose — adding a case
+    /// must force a decision here.
+    var explanation: String {
+        switch self {
+        case .allowed:            return "Inside the safe zone — can be moved to the Trash"
+        case .blockedSystemPath:  return "A protected system location — Dustpan never touches it"
+        case .blockedOutsideHome: return "Outside your home folder — Dustpan only acts inside it"
+        case .blockedMissing:     return "Nothing is there to remove"
+        case .blockedNeedsAdmin:  return "Owned by the system — macOS will ask for admin authorization"
+        case .blockedExcluded:    return "Inside a Protected Folder you chose"
+        }
+    }
 }
 
 /// Honest sizing result. `deniedCount` counts permission-denied subtrees/files
@@ -80,6 +96,14 @@ enum SafeDeleteEngine {
 
     // MARK: Safety gate
 
+    /// True if `url` is equal to OR inside a user-chosen Protected Folder.
+    /// The single chokepoint verdict() and scanReclaimable()'s filter both call,
+    /// so the hard block and the scan-time drop can never disagree. `protected`
+    /// is injectable so a single scan can load the list once and pass it down.
+    static func isExcluded(_ url: URL, protected: [String] = ExclusionList.list()) -> Bool {
+        ExclusionList.isExcluded(url, protected: protected)
+    }
+
     /// The ONE exception to the home-only rule: a top-level `.app` bundle
     /// directly inside /Applications, and only when the user explicitly chose to
     /// uninstall it. Still Trash-only; SIP-protected Apple apps refuse at trash
@@ -111,6 +135,13 @@ enum SafeDeleteEngine {
         let path = url.resolvingSymlinksInPath().standardizedFileURL.path
         let home = FileManager.default.homeDirectoryForCurrentUser
             .resolvingSymlinksInPath().standardizedFileURL.path
+
+        // User-chosen Protected Folders: a HARD BLOCK that wins over EVERY allow
+        // below (the /Applications uninstall carve-out and the home-membership
+        // allow both lose to it). Resolved-path equal-or-inside test via the
+        // single helper the scan filter also uses, so block and filter can't
+        // drift. This only ADDS a refusal — it never removes an existing block.
+        if isExcluded(url) { return .blockedExcluded }
 
         if isUserUninstallableAppBundle(path) {
             guard FileManager.default.fileExists(atPath: path) else { return .blockedMissing }
@@ -267,8 +298,11 @@ enum SafeDeleteEngine {
         // popup. Only the /Applications top-level-.app verdict can return this.
         if v == .blockedNeedsAdmin { return finderTrash(url) }
         guard v.isAllowed else {
+            // Plain-language reason — never the raw case name. The per-case
+            // explanation already distinguishes a Protected Folder (the user's
+            // own choice) from a safety-zone miss.
             return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
-                                error: "Refused (\(v)) — outside the safe zone")
+                                error: "Refused — \(v.explanation)")
         }
         let reclaimed = size(of: url)
         do {
@@ -277,6 +311,19 @@ enum SafeDeleteEngine {
             return TrashOutcome(url: url, success: true, reclaimedBytes: reclaimed,
                                 error: nil, trashedTo: landedAt as URL?)
         } catch {
+            // The path passed verdict() (inside home, or the /Applications
+            // carve-out) but macOS refused the user-level move. The usual cause
+            // is a root-owned item living in home — an installer/sudo leftover:
+            // trashItem can't write the Put-Back xattr as a non-owner (EPERM),
+            // and admin *membership* alone doesn't grant it. Delegate to Finder,
+            // which shows the standard admin-auth popup and performs the same
+            // Trash-only move with privilege — Dustpan still never holds elevated
+            // rights. Only escalate for that exact shape (permission error on an
+            // item owned by another user) so well-behaved items never get a
+            // needless password prompt.
+            if isPermissionError(error) && ownedByAnotherUser(url.path) {
+                return finderTrash(url)
+            }
             return TrashOutcome(url: url, success: false, reclaimedBytes: 0,
                                 error: error.localizedDescription)
         }
@@ -376,6 +423,12 @@ enum SafeDeleteEngine {
               risk: .safe, detail: "Repopulated by pip"),
         .init(name: "Gradle caches", relativePath: ".gradle/caches",
               risk: .caution, detail: "Re-downloaded on next build"),
+        .init(name: "Gradle wrapper distributions", relativePath: ".gradle/wrapper/dists",
+              risk: .safe, detail: "Re-downloaded by the Gradle wrapper on next build"),
+        .init(name: "Maven repository", relativePath: ".m2/repository",
+              risk: .caution, detail: "Re-downloaded on next build; large and slow to refetch"),
+        .init(name: "Carthage cache", relativePath: "Library/Caches/org.carthage.CarthageKit",
+              risk: .safe, detail: "Re-downloaded/rebuilt by `carthage bootstrap`"),
         .init(name: "CocoaPods cache", relativePath: "Library/Caches/CocoaPods",
               risk: .safe, detail: "Repopulated by pod install"),
         .init(name: "SwiftPM cache", relativePath: "Library/Caches/org.swift.swiftpm",
@@ -509,9 +562,15 @@ enum SafeDeleteEngine {
     /// gate keeps holding for anything the user later confirms.
     static func scanReclaimable(mode: ScanMode) -> [ScannedItem] {
         let home = FileManager.default.homeDirectoryForCurrentUser
+        // Load Protected Folders once and thread it through every filter/walk so
+        // we don't re-read the manifest per item. Excluded items are dropped here
+        // (never offered) and refused at delete time by verdict() — defense in
+        // depth on the same `protected` list.
+        let protected = ExclusionList.list()
         var items: [ScannedItem] = reclaimableSpecs().compactMap { spec in
             let url = home.appendingPathComponent(spec.relativePath)
             guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            guard !ExclusionList.isExcluded(url, protected: protected) else { return nil }
             let bytes = size(of: url)
             guard bytes > 0 else { return nil }
             return ScannedItem(name: spec.name, url: url, bytes: bytes,
@@ -522,10 +581,11 @@ enum SafeDeleteEngine {
         items += scanDeviceBackups(home: home)
 
         if mode == .deep {
-            let discovered = discoverLargeAppCaches(home: home)
+            let discovered = discoverLargeAppCaches(home: home, protected: protected)
                 + discoverSimulatorDevices(home: home)
                 + discoverXcodeArchives(home: home)
-                + discoverNodeModules(home: home)
+                + discoverNodeModules(home: home, protected: protected)
+                + discoverBuildArtifacts(home: home, protected: protected)
             for item in discovered {
                 // Global dedupe: drop anything equal to or inside an emitted item.
                 let covered = items.contains {
@@ -534,6 +594,10 @@ enum SafeDeleteEngine {
                 if !covered { items.append(item) }
             }
         }
+        // Final safety net: drop any item inside a Protected Folder regardless of
+        // which scanner produced it (covers device backups and simulator/archive
+        // walks that don't take `protected`). verdict() still gates the delete.
+        items.removeAll { ExclusionList.isExcluded($0.url, protected: protected) }
         return items.sorted { $0.bytes > $1.bytes }
     }
 
@@ -573,7 +637,7 @@ enum SafeDeleteEngine {
     /// One listdir of ~/Library/Caches; each subdirectory ≥ 100 MB becomes its own
     /// `.safe` item. Spec-covered names are skipped (deduped); permission-denied
     /// subdirectories are skipped via `rootDenied`, never shown as 0.
-    private static func discoverLargeAppCaches(home: URL) -> [ScannedItem] {
+    private static func discoverLargeAppCaches(home: URL, protected: [String] = ExclusionList.list()) -> [ScannedItem] {
         let root = home.appendingPathComponent("Library/Caches")
         let threshold: Int64 = 100_000_000
         guard let children = try? FileManager.default.contentsOfDirectory(
@@ -583,6 +647,7 @@ enum SafeDeleteEngine {
         for child in children {
             if Task.isCancelled { break }
             if specCoveredCacheNames.contains(child.lastPathComponent) { continue }
+            if ExclusionList.isExcluded(child, protected: protected) { continue } // protected → don't measure
             let v = try? child.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             guard v?.isDirectory == true, v?.isSymbolicLink != true else { continue }
             let report = sizeReport(of: child)
@@ -640,7 +705,7 @@ enum SafeDeleteEngine {
     /// Bounded walk (maxDepth 4) of common project roots for node_modules dirs.
     /// Read-only, prunes into found node_modules, skips hidden dirs, symlinks,
     /// and mount points. `.caution`: the project won't build until reinstalled.
-    private static func discoverNodeModules(home: URL) -> [ScannedItem] {
+    private static func discoverNodeModules(home: URL, protected: [String] = ExclusionList.list()) -> [ScannedItem] {
         let roots = ["Downloads", "Documents", "Desktop"].map(home.appendingPathComponent)
         var found: [ScannedItem] = []
 
@@ -655,6 +720,7 @@ enum SafeDeleteEngine {
                 if Task.isCancelled { return }
                 let v = try? child.resourceValues(forKeys: keys)
                 guard v?.isDirectory == true, v?.isSymbolicLink != true, v?.isVolume != true else { continue }
+                if ExclusionList.isExcluded(child, protected: protected) { continue } // prune protected subtree
                 if child.lastPathComponent == "node_modules" {
                     let bytes = size(of: child)
                     guard bytes > 0 else { continue }
@@ -668,6 +734,75 @@ enum SafeDeleteEngine {
                         detail: "Restored by npm/pnpm install; project won't build until reinstalled." + when))
                     continue // prune: never descend into a found node_modules
                 }
+                walk(child, depth: depth + 1)
+            }
+        }
+        for root in roots { walk(root, depth: 1) }
+        return found
+    }
+
+    /// Bounded walk (maxDepth 4) of common project roots for project-relative
+    /// build artifacts: Rust `target/`, `Carthage/Build`, and generic
+    /// `build`/`dist`/`out`. These are NOT fixed paths so they can't be static
+    /// specs. Manifest-GATED to avoid false positives: an artifact dir is only
+    /// emitted when its build manifest sits beside it (Cargo.toml / Cartfile /
+    /// package.json|webpack|vite config), so an arbitrary directory merely named
+    /// "build"/"dist"/"out" is never swept. Read-only, prunes into matches, skips
+    /// hidden dirs, symlinks, and mount points. `.caution`: near source and the
+    /// project won't ship until rebuilt. Every URL is home-rooted, so verdict()
+    /// still gates the delete identically.
+    private static func discoverBuildArtifacts(home: URL, protected: [String] = ExclusionList.list()) -> [ScannedItem] {
+        let roots = ["Downloads", "Documents", "Desktop"].map(home.appendingPathComponent)
+        var found: [ScannedItem] = []
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .isVolumeKey,
+                                         .contentModificationDateKey]
+
+        func emit(_ url: URL, dir: URL, hint: String) {
+            if ExclusionList.isExcluded(url, protected: protected) { return } // protected → never emit
+            let v = try? url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            guard v?.isDirectory == true, v?.isSymbolicLink != true else { return }
+            let bytes = size(of: url)
+            guard bytes > 0 else { return }
+            found.append(ScannedItem(
+                name: "\(url.lastPathComponent) — \(dir.lastPathComponent)", url: url, bytes: bytes,
+                risk: .caution, detail: hint + "; project won't ship until rebuilt."))
+        }
+
+        func walk(_ dir: URL, depth: Int) {
+            if Task.isCancelled || depth > 4 { return }
+            guard let children = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: Array(keys), options: [.skipsHiddenFiles])
+            else { return }
+            let names = Set(children.map { $0.lastPathComponent })
+            // Rust: a sibling Cargo.toml beside target/
+            if names.contains("Cargo.toml"), let target = children.first(where: { $0.lastPathComponent == "target" }) {
+                emit(target, dir: dir, hint: "Rebuilt by `cargo build`")
+            }
+            // Carthage/Build beside a Cartfile
+            if names.contains("Cartfile"), let carthage = children.first(where: { $0.lastPathComponent == "Carthage" }) {
+                let buildDir = carthage.appendingPathComponent("Build")
+                if FileManager.default.fileExists(atPath: buildDir.path) {
+                    emit(buildDir, dir: dir, hint: "Rebuilt by `carthage bootstrap`")
+                }
+            }
+            // Generic build/dist/out ONLY beside a JS/build manifest — the
+            // false-positive guard: a plain folder named build/dist/out is left alone.
+            let buildManifest = names.contains("package.json") || names.contains("webpack.config.js")
+                || names.contains("vite.config.js") || names.contains("vite.config.ts")
+            if buildManifest {
+                for outName in ["build", "dist", "out"] where names.contains(outName) {
+                    if let outDir = children.first(where: { $0.lastPathComponent == outName }) {
+                        emit(outDir, dir: dir, hint: "Regenerated by the project's build step")
+                    }
+                }
+            }
+            for child in children {
+                if Task.isCancelled { return }
+                let v = try? child.resourceValues(forKeys: keys)
+                guard v?.isDirectory == true, v?.isSymbolicLink != true, v?.isVolume != true else { continue }
+                if ExclusionList.isExcluded(child, protected: protected) { continue } // prune protected subtree
+                // Prune: never descend into the artifact dirs we may have emitted.
+                if ["target", "build", "dist", "out", "Carthage", "node_modules"].contains(child.lastPathComponent) { continue }
                 walk(child, depth: depth + 1)
             }
         }

@@ -10,10 +10,19 @@ enum LargeFileEngine {
 
     static let threshold: Int64 = 100_000_000 // 100 MB
 
+    /// Scan outcome carrying the same honesty signal as SafeDeleteEngine.SizeReport:
+    /// `deniedRoots` are scan roots macOS refused outright (permission-denied), so
+    /// the surface can render "—" + a permission affordance instead of pretending an
+    /// unreadable root was clean. Empty `deniedRoots` ⇒ every root was fully walked.
+    struct ScanResult: Equatable {
+        var items: [ScannedItem] = []
+        var deniedRoots: [URL] = []
+    }
+
     /// Quick = the folders where big files actually accumulate.
     /// Deep  = the whole home directory, minus ~/Library (other features own it)
     ///         and managed libraries/bundles.
-    static func scan(mode: SafeDeleteEngine.ScanMode) -> [ScannedItem] {
+    static func scan(mode: SafeDeleteEngine.ScanMode) -> ScanResult {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let roots: [URL]
         switch mode {
@@ -28,7 +37,12 @@ enum LargeFileEngine {
                 .filter { $0.lastPathComponent != "Library" } ?? []
         }
 
+        // Load Protected Folders once per scan (not per file) and skip anything
+        // the user hard-blocked: never walked, never offered. verdict() still gates
+        // the delete — this is the scan-time half of the same exclusion.
+        let protected = ExclusionList.list()
         var items: [ScannedItem] = []
+        var deniedRoots: [URL] = []
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey,
                                          .isVolumeKey, .isPackageKey, .totalFileAllocatedSizeKey,
                                          .fileAllocatedSizeKey]
@@ -37,6 +51,15 @@ enum LargeFileEngine {
                                               "aplibrary", "migratedphotolibrary", "app"]
 
         for root in roots {
+            if ExclusionList.isExcluded(root, protected: protected) { continue } // protected → skip entirely
+            // Probe the root: an unreadable root surfaces as DENIED, never as a
+            // clean empty result. Quick roots that simply don't exist (no Music
+            // folder) are not denials — only a permission failure counts.
+            do { _ = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: []) }
+            catch {
+                if SafeDeleteEngine.isPermissionError(error) { deniedRoots.append(root) }
+                continue
+            }
             guard let en = FileManager.default.enumerator(
                 at: root, includingPropertiesForKeys: Array(keys),
                 options: [.skipsHiddenFiles],
@@ -46,7 +69,12 @@ enum LargeFileEngine {
             var visited = 0
             for case let url as URL in en {
                 visited += 1
-                if visited % 2048 == 0 && Task.isCancelled { return items.sorted { $0.bytes > $1.bytes } }
+                if visited % 2048 == 0 && Task.isCancelled {
+                    return ScanResult(items: items.sorted { $0.bytes > $1.bytes }, deniedRoots: deniedRoots)
+                }
+                if ExclusionList.isExcluded(url, protected: protected) {
+                    en.skipDescendants(); continue // protected subtree → prune
+                }
                 guard let v = try? url.resourceValues(forKeys: keys) else { continue }
                 if v.isSymbolicLink == true { if v.isDirectory == true { en.skipDescendants() }; continue }
                 if v.isVolume == true { en.skipDescendants(); continue }
@@ -62,6 +90,6 @@ enum LargeFileEngine {
                     detail: "Your file — you decide." + UninstallEngine.provenance(of: url)))
             }
         }
-        return items.sorted { $0.bytes > $1.bytes }
+        return ScanResult(items: items.sorted { $0.bytes > $1.bytes }, deniedRoots: deniedRoots)
     }
 }

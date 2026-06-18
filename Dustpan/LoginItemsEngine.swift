@@ -36,6 +36,17 @@ struct LoginItem: Identifiable, Hashable {
 
 enum LoginItemsEngine {
 
+    /// Scan outcome carrying the same honesty signal as SafeDeleteEngine.SizeReport:
+    /// `deniedRoots` are launchd folders macOS refused outright (permission-denied),
+    /// so the surface can say "—"/"couldn't read this folder" instead of implying it
+    /// held no jobs. A folder that simply doesn't exist is not a denial. Empty
+    /// `deniedRoots` ⇒ every folder was readable (the listing is the whole picture
+    /// for the unprivileged scope this surface already documents).
+    struct ScanResult: Equatable {
+        var items: [LoginItem] = []
+        var deniedRoots: [URL] = []
+    }
+
     /// The three launchd folders readable without privileges. /System is
     /// excluded on purpose: it is macOS itself, pure noise for this surface.
     static var defaultRoots: [(URL, LoginItem.Domain)] {
@@ -47,7 +58,7 @@ enum LoginItemsEngine {
         ]
     }
 
-    static func scan() -> [LoginItem] {
+    static func scan() -> ScanResult {
         var livePrefixes = Set<String>()
         for id in UninstallEngine.listInstalledApps().compactMap(\.bundleID)
                 + Array(UninstallEngine.runningBundleIDs()) {
@@ -57,12 +68,20 @@ enum LoginItemsEngine {
     }
 
     /// Root-injectable for the empirical harness.
-    static func scan(roots: [(URL, LoginItem.Domain)], livePrefixes: Set<String>) -> [LoginItem] {
+    static func scan(roots: [(URL, LoginItem.Domain)], livePrefixes: Set<String>) -> ScanResult {
         var items: [LoginItem] = []
+        var deniedRoots: [URL] = []
         for (root, domain) in roots {
-            guard let children = try? FileManager.default.contentsOfDirectory(
-                at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-            else { continue } // folder absent or unreadable — nothing to claim
+            let children: [URL]
+            do {
+                children = try FileManager.default.contentsOfDirectory(
+                    at: root, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            } catch {
+                // A permission-denied folder is reported as DENIED, never silently
+                // collapsed to "no jobs". A merely-absent folder claims nothing.
+                if SafeDeleteEngine.isPermissionError(error) { deniedRoots.append(root) }
+                continue
+            }
             for url in children.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
                 guard url.pathExtension == "plist" else { continue }
                 let filename = url.deletingPathExtension().lastPathComponent
@@ -98,7 +117,7 @@ enum LoginItemsEngine {
                     provenance: UninstallEngine.provenance(of: url)))
             }
         }
-        return items
+        return ScanResult(items: items, deniedRoots: deniedRoots)
     }
 
     /// launchd keys → plain language. One line, no jargon.

@@ -127,6 +127,7 @@ struct PermissionGateView: View {
                 Image(systemName: "hand.raised")
                     .font(.system(size: 24, weight: .medium))
                     .foregroundStyle(Theme.primary)
+                    .accessibilityHidden(true)
                 Text("Before the first scan")
                     .font(Typo.h3)
                     .foregroundStyle(Theme.textPrimary)
@@ -148,17 +149,25 @@ struct PermissionGateView: View {
                     Image(systemName: folder.systemImage)
                         .foregroundStyle(Theme.textTertiary)
                         .frame(width: 20)
+                        .accessibilityHidden(true)
                     Text(folder.name)
                         .font(Typo.cardHeading)
                         .foregroundStyle(Theme.textPrimary)
                     Spacer()
                     switch folder.state {
                     case .undetermined: EmptyView()
-                    case .asking: ProgressView().controlSize(.small)
-                    case .granted: PillBadge(text: "Granted", tint: Theme.success)
-                    case .denied: PillBadge(text: "No — shows \"—\"", tint: Theme.neutral)
+                    case .asking:
+                        ProgressView().controlSize(.small)
+                            .accessibilityLabel("Asking for access")
+                    case .granted:
+                        PillBadge(text: "Granted", tint: Theme.success)
+                            .accessibilityLabel("Granted")
+                    case .denied:
+                        PillBadge(text: "No — shows \"—\"", tint: Theme.neutral)
+                            .accessibilityLabel("Declined — will show as no measurement")
                     }
                 }
+                .accessibilityElement(children: .combine)
             }
             Button(isAsking ? "Asking…" : "Ask for folder access", action: askForFolderAccess)
                 .buttonStyle(PrimaryButtonStyle())
@@ -177,9 +186,15 @@ struct PermissionGateView: View {
                 Text("Full Disk Access — optional").typoLabel()
                 Spacer()
                 switch fdaState {
-                case .granted: PillBadge(text: "Granted", tint: Theme.success)
-                case .notGranted: PillBadge(text: "Not granted", tint: Theme.neutral)
-                case .unknown, nil: PillBadge(text: "—", tint: Theme.neutral)
+                case .granted:
+                    PillBadge(text: "Granted", tint: Theme.success)
+                        .accessibilityLabel("Granted")
+                case .notGranted:
+                    PillBadge(text: "Not granted", tint: Theme.neutral)
+                        .accessibilityLabel("Not granted")
+                case .unknown, nil:
+                    PillBadge(text: "—", tint: Theme.neutral)
+                        .accessibilityLabel("Status unknown")
                 }
             }
             Text("Exact numbers for some ~/Library folders (Mail, Messages, Safari) need Full Disk Access. macOS has no dialog for this — it's a toggle in System Settings. Without it those folders honestly read \"≥\" or \"—\". After granting, relaunch Dustpan.")

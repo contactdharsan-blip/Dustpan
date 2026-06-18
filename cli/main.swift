@@ -182,6 +182,144 @@ func cmdCaches() {
            items: SafeDeleteEngine.scanReclaimable(mode: mode), jsonKey: "caches")
 }
 
+func cmdReclaim() {
+    let mode: SafeDeleteEngine.ScanMode = deepMode ? .deep : .quick
+    let all = SafeDeleteEngine.scanReclaimable(mode: mode)
+    let safe = all.filter { $0.risk == .safe }     // INVARIANT: caution NEVER auto-included
+    let caution = all.filter { $0.risk == .caution }
+    let plannedBytes = safe.reduce(Int64(0)) { $0 + $1.bytes }
+    let urls = safe.map { $0.url }
+
+    if jsonMode {
+        // Machine plan. No TTY to confirm → only act when --yes is passed.
+        if !assumeYes {
+            emitJSON([
+                "dryRun": true,
+                "reclaimable": safe.map(itemDict),
+                "skippedCaution": caution.map(itemDict),
+                "plannedBytes": plannedBytes,
+                "plannedText": fmt(plannedBytes),
+                "note": "pass --yes to actually move these to the Trash",
+            ])
+            return
+        }
+        let outcomes = SafeDeleteEngine.moveToTrash(urls, context: "CLI reclaim")
+        let reclaimed = outcomes.filter { $0.success }.reduce(Int64(0)) { $0 + $1.reclaimedBytes }
+        emitJSON([
+            "trashed": zip(safe, outcomes).filter { $0.1.success }.map { itemDict($0.0) },
+            "refused": zip(safe, outcomes).filter { !$0.1.success }.map { ["path": $0.0.url.path, "error": $0.1.error ?? "failed"] },
+            "reclaimedBytes": reclaimed,
+            "reclaimedText": fmt(reclaimed),
+            "skippedCaution": caution.count,
+        ])
+        return
+    }
+
+    // Human: preview the SAFE plan, list skipped caution, then confirm (mirror cmdTrash).
+    line("Safe reclaimable caches (\(deepMode ? "deep" : "quick")) — these will move to the Trash (reversible):")
+    if safe.isEmpty { line("  (nothing safe to reclaim)") }
+    for it in safe { printItem(it) }
+    line("  ─────")
+    line("  \(safe.count) item(s), \(fmt(plannedBytes)) total")
+    if !caution.isEmpty {
+        line("Skipped (Caution — review individually with `dustpan caches` then `dustpan trash <path>`):")
+        for it in caution { printItem(it) }
+    }
+    guard !safe.isEmpty else { exit(0) }
+    if !assumeYes {
+        FileHandle.standardOutput.write(Data("Proceed? [y/N] ".utf8))
+        let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        guard answer == "y" || answer == "yes" else { line("Aborted."); exit(0) }
+    }
+    let outcomes = SafeDeleteEngine.moveToTrash(urls, context: "CLI reclaim")
+    var reclaimed: Int64 = 0
+    for (it, o) in zip(safe, outcomes) {
+        if o.success { reclaimed += o.reclaimedBytes; line("  ✓ trashed \(it.name)") }
+        else { line("  ✗ \(it.name): \(o.error ?? "failed")") }
+    }
+    line("Reclaimed \(fmt(reclaimed)) → Trash. `dustpan history` to review or restore.")
+}
+
+func cmdSlim() {
+    // App localization slimming. Mirrors cmdReclaim's confirmation discipline:
+    // report → confirm → act. The actionable flag is the SINGLE source of truth
+    // (derived from verdict() inside the engine), so we only ever act on
+    // home-scoped bundles; /Applications rows are shown but never touched.
+    let apps = AppSlimmingEngine.scan()
+    let actionable = apps.filter { $0.actionable }
+    let plannedBytes = actionable.reduce(Int64(0)) { $0 + $1.reclaimableBytes }
+
+    if jsonMode {
+        // Machine plan. No TTY to confirm → only act when --yes is passed.
+        if !assumeYes {
+            emitJSON([
+                "dryRun": true,
+                "apps": apps.map { a -> [String: Any] in
+                    [
+                        "name": a.name, "path": a.url.path,
+                        "reclaimableBytes": a.reclaimableBytes,
+                        "reclaimableText": a.reclaimableText,
+                        "actionable": a.actionable,
+                        "removableCount": a.removable.count,
+                    ]
+                },
+                "plannedBytes": plannedBytes,
+                "plannedText": fmt(plannedBytes),
+                "note": "pass --yes to move unused localizations to the Trash (actionable apps only)",
+            ])
+            return
+        }
+        var reclaimed: Int64 = 0
+        var slimmed: [[String: Any]] = []
+        for a in actionable {
+            let outcomes = AppSlimmingEngine.slim(a, context: "CLI slim")
+            let freed = outcomes.filter { $0.success }.reduce(Int64(0)) { $0 + $1.reclaimedBytes }
+            reclaimed += freed
+            slimmed.append(["name": a.name, "path": a.url.path,
+                            "reclaimedBytes": freed, "reclaimedText": fmt(freed)])
+        }
+        emitJSON([
+            "slimmed": slimmed,
+            "reclaimedBytes": reclaimed,
+            "reclaimedText": fmt(reclaimed),
+            "skippedNonActionable": apps.count - actionable.count,
+        ])
+        return
+    }
+
+    // Human: preview the plan, mark non-actionable rows, then confirm.
+    line("App localizations — unused languages will move to the Trash (reversible):")
+    if apps.isEmpty { line("  (no apps with removable localizations found)") }
+    for a in apps {
+        let size = a.reclaimableText.padding(toLength: 10, withPad: " ", startingAt: 0)
+        if a.actionable {
+            line("  \(size) \(a.name)  (\(a.removable.count) of \(a.totalLproj) languages)")
+        } else {
+            line("  \(size) \(a.name)  (outside safe zone — won't touch; signed bundle)")
+        }
+    }
+    line("  ─────")
+    line("  \(actionable.count) actionable app(s), \(fmt(plannedBytes)) total")
+    line("Note: removed localizations go to Trash (reversible); slimming breaks the")
+    line("app's code signature until it's reinstalled or relaunched.")
+    guard !actionable.isEmpty else { exit(0) }
+    if !assumeYes {
+        FileHandle.standardOutput.write(Data("Proceed? [y/N] ".utf8))
+        let answer = readLine()?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        guard answer == "y" || answer == "yes" else { line("Aborted."); exit(0) }
+    }
+    var reclaimed: Int64 = 0
+    for a in actionable {
+        let outcomes = AppSlimmingEngine.slim(a, context: "CLI slim")
+        let freed = outcomes.filter { $0.success }.reduce(Int64(0)) { $0 + $1.reclaimedBytes }
+        reclaimed += freed
+        line("  ✓ slimmed \(a.name) (freed \(fmt(freed)))")
+    }
+    let skipped = apps.count - actionable.count
+    if skipped > 0 { line("  (skipped \(skipped) app(s) outside the safe zone)") }
+    line("Reclaimed \(fmt(reclaimed)) → Trash. `dustpan history` to review or restore.")
+}
+
 func cmdDuplicates() {
     let mode: SafeDeleteEngine.ScanMode = deepMode ? .deep : .quick
     report(title: "Duplicate files (\(deepMode ? "deep" : "quick")) — byte-identical groups:",
@@ -303,6 +441,53 @@ func cmdRules() {
     line("Paths outside home or containing \"..\" are rejected; every delete still passes the safety gate.")
 }
 
+func cmdExclude() {
+    let sub = operands.first ?? "list"
+    switch sub {
+    case "list":
+        let url = ExclusionList.protectedPathsURL
+        let paths = ExclusionList.list()
+        if jsonMode {
+            emitJSON(["manifestPath": url.path, "count": paths.count, "paths": paths])
+            return
+        }
+        line("Protected folders — Dustpan never scans or trashes anything under these:")
+        line("Manifest: \(url.path)")
+        if paths.isEmpty { line("  (none yet — `dustpan exclude add <folder>`)") }
+        for p in paths { line("  • \(p)") }
+    case "add", "remove":
+        guard let raw = operands.dropFirst().first else {
+            err("usage: dustpan exclude \(sub) <path>"); exit(2)
+        }
+        let path = resolveToAbsolute(raw)
+        let result = sub == "add"
+            ? ExclusionList.add(path: path)
+            : ExclusionList.remove(path: path)
+        // add/remove return the resulting list; the normalized form is what
+        // ends up stored, so confirm against that — not the raw argument.
+        let stored = ExclusionList.normalize(path)
+        let present = result.contains(stored)
+        let ok = sub == "add" ? present : !present
+        if jsonMode {
+            emitJSON(["action": sub, "path": stored, "ok": ok, "count": result.count, "paths": result])
+            return
+        }
+        line(ok ? "  ✓ \(sub == "add" ? "protected" : "unprotected") \(stored)"
+                : "  ✗ could not \(sub) \(stored)")
+    default:
+        err("usage: dustpan exclude <list | add <path> | remove <path>>"); exit(2)
+    }
+}
+
+/// Expand `~` and resolve a relative argument against the current directory so
+/// the stored protected path is always absolute (the manifest stores absolute
+/// folder paths — see ExclusionList). Normalization happens inside the engine.
+func resolveToAbsolute(_ raw: String) -> String {
+    let expanded = (raw as NSString).expandingTildeInPath
+    if expanded.hasPrefix("/") { return expanded }
+    return URL(fileURLWithPath: expanded).path
+}
+
 func cmdDocker() {
     let images = DockerReclaimEngine.scan()
     if jsonMode {
@@ -394,7 +579,7 @@ func cmdTrash() {
             line("  • \(size.padding(toLength: 10, withPad: " ", startingAt: 0)) \(u.path)\(note)")
             allowed.append(u)
         } else {
-            line("  ✗ REFUSED \(u.path)  — \(v)")
+            line("  ✗ REFUSED \(u.path)  — \(v.explanation)")
         }
     }
     guard !allowed.isEmpty else { err("Nothing eligible to trash."); exit(1) }
@@ -449,9 +634,12 @@ func cmdHelp() {
       snapshots       Local Time Machine snapshots
       history         Trash audit journal
       rules           Show cleaning rules (built-in + your community manifest)
+      exclude         List protected folders (`exclude add|remove <path>` to edit)
 
     ACT (Trash-only, reversible, verdict()-gated + journaled):
       trash <path>... Move paths to the Trash         (--yes to skip prompt)
+      reclaim         Trash all SAFE reclaimable caches    (--deep; --yes to skip prompt)
+      slim            Remove unused app localizations (home-scoped; --yes to act)
       restore <id>    Put a trashed item back          (id from `history`)
 
     GLOBAL FLAGS:
@@ -469,11 +657,14 @@ func cmdHelp() {
 switch command {
 case "scan":               cmdScan()
 case "caches":             cmdCaches()
+case "reclaim":            cmdReclaim()
+case "slim":               cmdSlim()
 case "duplicates", "dupes": cmdDuplicates()
 case "large":              cmdLarge()
 case "clutter":            cmdClutter()
 case "docker":             cmdDocker()
 case "rules":              cmdRules()
+case "exclude":            cmdExclude()
 case "apps":               cmdApps()
 case "orphans":            cmdOrphans()
 case "login-items":        cmdLoginItems()

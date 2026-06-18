@@ -137,10 +137,20 @@ enum ToastStyle {
     }
 }
 
-/// A glass pill notification: tinted icon + message on a frosted capsule.
+/// An optional inline affordance on a toast — e.g. "Undo" / "Show in History".
+/// A label plus the closure to run; identity-free so it's `let`-stored cheaply.
+struct ToastAction {
+    let title: String
+    let handler: () -> Void
+}
+
+/// A glass pill notification: tinted icon + message on a frosted capsule, with
+/// an optional trailing action button (§5.2). The action button is tinted to
+/// match the toast's semantic color and reuses the same capsule idiom.
 struct ToastView: View {
     let message: String
     var style: ToastStyle = .info
+    var action: ToastAction? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -150,6 +160,14 @@ struct ToastView: View {
             Text(message)
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(Theme.textPrimary)
+
+            if let action {
+                Button(action.title, action: action.handler)
+                    .buttonStyle(.plain)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(style.tint)
+                    .padding(.leading, 2)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
@@ -162,10 +180,17 @@ struct ToastView: View {
 /// `toastVariants`). It does NOT edit ContentView — the integrator attaches
 /// `.toast(...)` at the ContentView root.
 ///
+/// An optional `action` renders a trailing button. When `persistent` is set
+/// (use for errors/failures the user must acknowledge or act on) the auto-
+/// dismiss timer is skipped — the toast stays until the caller clears the
+/// binding (e.g. from the action handler), so an error never silently vanishes.
+///
 /// §5.4: enter/exit collapse to instant when reduce-motion is on.
 struct ToastPresenter: ViewModifier {
     @Binding var message: String?
     var style: ToastStyle
+    var action: ToastAction? = nil
+    var persistent: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var dismissTask: Task<Void, Never>? = nil
@@ -174,7 +199,7 @@ struct ToastPresenter: ViewModifier {
         content
             .overlay(alignment: .top) {
                 if let message {
-                    ToastView(message: message, style: style)
+                    ToastView(message: message, style: style, action: action)
                         .padding(.top, 16)
                         .transition(
                             reduceMotion
@@ -191,6 +216,8 @@ struct ToastPresenter: ViewModifier {
 
     private func scheduleDismiss() {
         dismissTask?.cancel()
+        // Persistent toasts (failures) wait for an explicit dismissal/action.
+        guard !persistent else { return }
         dismissTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 2_500_000_000) // ~2.5s
             guard !Task.isCancelled else { return }
@@ -201,8 +228,22 @@ struct ToastPresenter: ViewModifier {
 
 extension View {
     /// Attach at a root view: `.toast(message: $toastMessage, style: .success)`.
-    func toast(message: Binding<String?>, style: ToastStyle = .info) -> some View {
-        modifier(ToastPresenter(message: message, style: style))
+    ///
+    /// Pass an `action` to add a trailing button (e.g. "Undo" / "Show in
+    /// History"), and `persistent: true` to keep an error/failure toast up
+    /// until the binding is cleared instead of auto-dismissing after ~2.5s.
+    func toast(
+        message: Binding<String?>,
+        style: ToastStyle = .info,
+        action: ToastAction? = nil,
+        persistent: Bool = false
+    ) -> some View {
+        modifier(ToastPresenter(
+            message: message,
+            style: style,
+            action: action,
+            persistent: persistent
+        ))
     }
 }
 

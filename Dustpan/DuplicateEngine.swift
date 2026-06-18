@@ -18,7 +18,16 @@ enum DuplicateEngine {
     /// worth the disk churn. The UI caption states the floor honestly.
     static let threshold: Int64 = 10_000_000 // 10 MB
 
-    static func scan(mode: SafeDeleteEngine.ScanMode) -> [ScannedItem] {
+    /// Scan outcome carrying the same honesty signal as SafeDeleteEngine.SizeReport:
+    /// `deniedRoots` are scan roots macOS refused outright (permission-denied), so
+    /// the surface can render "—" + a permission affordance instead of pretending an
+    /// unreadable root held no duplicates. Empty `deniedRoots` ⇒ every root was read.
+    struct ScanResult: Equatable {
+        var items: [ScannedItem] = []
+        var deniedRoots: [URL] = []
+    }
+
+    static func scan(mode: SafeDeleteEngine.ScanMode) -> ScanResult {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let roots: [URL]
         switch mode {
@@ -38,7 +47,7 @@ enum DuplicateEngine {
     }
 
     /// Root-injectable for the empirical harness.
-    static func scan(roots: [URL]) -> [ScannedItem] {
+    static func scan(roots: [URL]) -> ScanResult {
         struct Candidate {
             let url: URL
             let logicalSize: Int64   // identical content ⇒ identical logical size
@@ -55,11 +64,25 @@ enum DuplicateEngine {
         let managedExtensions: Set<String> = ["photoslibrary", "musiclibrary", "tvlibrary",
                                               "aplibrary", "migratedphotolibrary", "app"]
 
+        // Load Protected Folders once per scan (not per file) and skip anything
+        // the user hard-blocked: never walked, never offered. verdict() still gates
+        // the delete — this is the scan-time half of the same exclusion.
+        let protected = ExclusionList.list()
+
         // 1. Collect candidates, dropping hard links to an already-seen file:
         //    two paths to one inode reclaim nothing — they are not duplicates.
         var seenIdentities = Set<AnyHashable>()
         var candidates: [Candidate] = []
+        var deniedRoots: [URL] = []
         for root in roots {
+            if ExclusionList.isExcluded(root, protected: protected) { continue } // protected → skip entirely
+            // Probe the root: an unreadable root surfaces as DENIED, never as a
+            // clean empty result. A root that simply doesn't exist is not a denial.
+            do { _ = try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil, options: []) }
+            catch {
+                if SafeDeleteEngine.isPermissionError(error) { deniedRoots.append(root) }
+                continue
+            }
             guard let en = FileManager.default.enumerator(
                 at: root, includingPropertiesForKeys: Array(keys),
                 options: [.skipsHiddenFiles],
@@ -69,7 +92,10 @@ enum DuplicateEngine {
             var visited = 0
             for case let url as URL in en {
                 visited += 1
-                if visited % 2048 == 0 && Task.isCancelled { return [] }
+                if visited % 2048 == 0 && Task.isCancelled { return ScanResult(deniedRoots: deniedRoots) }
+                if ExclusionList.isExcluded(url, protected: protected) {
+                    en.skipDescendants(); continue // protected subtree → prune
+                }
                 guard let v = try? url.resourceValues(forKeys: keys) else { continue }
                 if v.isSymbolicLink == true { if v.isDirectory == true { en.skipDescendants() }; continue }
                 if v.isVolume == true { en.skipDescendants(); continue }
@@ -102,7 +128,7 @@ enum DuplicateEngine {
         //    share head and tail while differing in the middle.
         var groups: [(hash: String, members: [Candidate])] = []
         for bucket in sizeBuckets {
-            if Task.isCancelled { return [] }
+            if Task.isCancelled { return ScanResult(deniedRoots: deniedRoots) }
             let partialBuckets = Dictionary(grouping: bucket) {
                 partialHash(of: $0.url, fileSize: $0.logicalSize) ?? "unreadable-\($0.url.path)"
             }
@@ -147,7 +173,7 @@ enum DuplicateEngine {
                     suggestedKeep: i == 0))
             }
         }
-        return items
+        return ScanResult(items: items, deniedRoots: deniedRoots)
     }
 
     /// SHA-256 over the first and last 64 KB. Nil when the file can't be read —

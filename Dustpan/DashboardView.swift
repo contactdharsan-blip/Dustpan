@@ -13,18 +13,45 @@ import Observation
     /// re-walk). Lets the purgeable counter update live after any action while
     /// the engine-call boundary stays in the store, not the views.
     var liveTotals: DiskTotals?
+    /// True from the moment a run starts until its stream finishes. A run can
+    /// finish WITHOUT a complete snapshot — if the detached sizing task was
+    /// cancelled mid-walk (continuation.finish() with isComplete never reached).
+    /// Views read `didFinishIncomplete` (below) to show a calm "couldn't finish —
+    /// try Refresh" state and re-enable Refresh, instead of pinning skeletons
+    /// forever. We never synthesize a score; honesty over a fake number.
+    var isScanning = false
+    /// The stream ended but never delivered a complete snapshot — a dead end unless
+    /// Refresh is offered. False before the first run (pristine) and during a run.
+    var didFinishIncomplete: Bool {
+        hasRunOnce && !isScanning && snapshot?.isComplete != true
+    }
+    /// Whether `refresh()` has been invoked at least once — distinguishes the
+    /// pristine pre-first-scan state (don't show an error) from a finished-but-incomplete run.
+    @ObservationIgnored private var hasRunOnce = false
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// Monotonic run id. The flag-clearing tail of a superseded run carries a stale
+    /// id and is ignored, so cancelling an old run can't clobber the new run's state.
+    @ObservationIgnored private var runID = 0
 
     func refresh() {
         task?.cancel()
         snapshot = nil
         completedAt = nil
         liveTotals = nil
+        hasRunOnce = true
+        isScanning = true
+        runID &+= 1
+        let myRun = runID
         task = Task {
             for await snap in StatsEngine.live() {
                 snapshot = snap
                 if snap.isComplete { completedAt = .now }
             }
+            // Stream finished. If we never reached a complete snapshot the run was
+            // cut short (cancelled mid-walk) — drop out of the scanning state so
+            // the UI can offer Refresh rather than waiting on skeletons forever.
+            // Only the live run may clear the flag; a superseded run's tail is stale.
+            if myRun == runID { isScanning = false }
         }
     }
 
@@ -68,10 +95,10 @@ struct DashboardView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
                 header
-                ScoreCard(snapshot: snapshot, reduceMotion: reduceMotion)
+                ScoreCard(snapshot: snapshot, didFinishIncomplete: store.didFinishIncomplete, reduceMotion: reduceMotion)
                 KPIGrid(snapshot: snapshot)
                 BreakdownCard(snapshot: snapshot, reduceMotion: reduceMotion)
-                ReclaimableCard(snapshot: snapshot, navigate: navigate)
+                ReclaimableCard(store: store, navigate: navigate)
                 NotMeasuredNote()
                 Spacer(minLength: 0)
             }
@@ -105,7 +132,14 @@ struct DashboardView: View {
                 Text("An honest picture of your disk. Every number here is measured on your Mac — nothing is estimated or inflated.")
                     .font(.callout).foregroundStyle(Theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                if snapshot?.isComplete != true {
+                if store.didFinishIncomplete {
+                    // The run ended before it could finish (e.g. cancelled mid-walk).
+                    // Say so calmly and point at Refresh — never a fake score.
+                    Text("Couldn't finish measuring — the scan stopped early. Try Refresh.")
+                        .font(.caption)
+                        .foregroundStyle(Theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if snapshot?.isComplete != true {
                     Text("macOS may ask permission for Desktop, Documents and Downloads — Dustpan only reads folder sizes.")
                         .font(.caption)
                         .foregroundStyle(Theme.textTertiary)
@@ -116,9 +150,11 @@ struct DashboardView: View {
             // The data is a one-shot snapshot, not a live feed — say when it was
             // measured instead of pretending it's "live".
             PillBadge(text: measuredPillText, tint: Theme.neutral)
+            // Disabled only while a run is genuinely in flight; an incomplete finish
+            // re-enables Refresh so the dead end is escapable.
             Button("Refresh") { store.refresh() }
                 .buttonStyle(GlassButtonStyle())
-                .disabled(snapshot != nil && snapshot?.isComplete != true)
+                .disabled(store.isScanning && snapshot?.isComplete != true)
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -126,6 +162,7 @@ struct DashboardView: View {
     }
 
     private var measuredPillText: String {
+        if store.didFinishIncomplete { return "didn't finish" }
         guard snapshot?.isComplete == true else { return "measuring…" }
         guard let at = store.completedAt else { return "measured" }
         return "measured " + at.formatted(.dateTime.hour().minute())
@@ -140,6 +177,9 @@ struct DashboardView: View {
 /// half-measured score.
 private struct ScoreCard: View {
     let snapshot: StatsSnapshot?
+    /// The run ended before a complete snapshot — show a calm retry prompt instead
+    /// of pinning skeletons forever. We never synthesize a score.
+    var didFinishIncomplete: Bool = false
     let reduceMotion: Bool
 
     var body: some View {
@@ -163,11 +203,29 @@ private struct ScoreCard: View {
                                     .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        Text("Score = percent-free minus a small reclaimable penalty (capped at 10 pts). Uncurved on purpose: a near-full disk honestly scores low.")
+                        Text("Score = the share of your used space that is NOT removable cruft (caches, logs, dev junk, Trash). It measures tidiness, not how full the disk is — emptying Trash and clearing caches raises it directly.")
                             .font(.caption)
                             .foregroundStyle(Theme.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.top, 2)
+                    }
+                    Spacer(minLength: 0)
+                }
+            } else if didFinishIncomplete {
+                // The run stopped before completing — no honest score to show.
+                // A calm dead-end exit, never a synthesized number.
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "exclamationmark.arrow.circlepath")
+                        .font(.system(size: 22))
+                        .foregroundStyle(Theme.textTertiary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Couldn't finish measuring")
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(Theme.textSecondary)
+                        Text("The scan stopped before it could compute a score. Use Refresh above to try again — we won't show a made-up number.")
+                            .font(.caption)
+                            .foregroundStyle(Theme.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 0)
                 }
@@ -531,8 +589,25 @@ struct PermissionBadgeButton: View {
 /// a calm, non-pushy call to action. While sizing/scanning, it shows skeletons;
 /// when nothing is reclaimable it says so plainly — no manufactured urgency.
 private struct ReclaimableCard: View {
-    let snapshot: StatsSnapshot?
+    /// Owns the snapshot AND the re-measure: the card both reads the reclaimable
+    /// number and acts on it, then refreshes the store so the number can't overstate.
+    let store: StatsStore
     var navigate: ((SidebarItem) -> Void)? = nil
+    @State private var showConfirm = false
+    @State private var toast: String? = nil
+    @State private var toastStyle: ToastStyle = .success
+
+    private var snapshot: StatsSnapshot? { store.snapshot }
+    /// SAFE-only subset — .caution is NEVER bulk-included (safety invariant). The
+    /// reclaim button and confirmation operate on this, never on reclaimableBytes.
+    private var safeItems: [ScannedItem] {
+        // Engine scans already drop protected items; this re-filter guards the
+        // case where a folder was protected AFTER the snapshot was measured, so a
+        // newly-protected item can never be pre-selected for one-click reclaim.
+        (snapshot?.reclaimable ?? [])
+            .filter { $0.risk == .safe && !SafeDeleteEngine.isExcluded($0.url) }
+    }
+    private var safeBytes: Int64 { safeItems.reduce(0) { $0 + $1.bytes } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -556,12 +631,24 @@ private struct ReclaimableCard: View {
                         .font(.subheadline)
                         .foregroundStyle(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let navigate {
-                        Button("Review in Developer Caches") {
-                            navigate(.category(.developerCaches))
+                    HStack(spacing: 12) {
+                        // One-click reclaim of ONLY the safe subset. The label uses
+                        // safeBytes, never reclaimableBytes — so it never overstates
+                        // what moves. Caution items are reviewed in Developer Caches.
+                        if safeBytes > 0 {
+                            Button("Reclaim \(ByteCountFormatter.string(fromByteCount: safeBytes, countStyle: .file))") {
+                                showConfirm = true
+                            }
+                            .buttonStyle(PrimaryButtonStyle())
+                            .accessibilityHint("Moves the safe reclaimable caches to the Trash after you confirm. Caution items are not included.")
                         }
-                        .buttonStyle(GlassButtonStyle())
-                        .accessibilityHint("Opens the Developer Caches scan where you can review and trash these items")
+                        if let navigate {
+                            Button("Review in Developer Caches") {
+                                navigate(.category(.developerCaches))
+                            }
+                            .buttonStyle(GlassButtonStyle())
+                            .accessibilityHint("Opens the Developer Caches scan where you can review and trash these items, including Caution items")
+                        }
                     }
                 } else {
                     Text("Nothing reclaimable in the known locations the quick scan checks. Your caches are already tidy.")
@@ -580,6 +667,45 @@ private struct ReclaimableCard: View {
         .padding(24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassCard()
+        .toast(message: $toast, style: toastStyle)
+        .confirmationDialog(
+            "Move \(safeItems.count) item\(safeItems.count == 1 ? "" : "s") to Trash?",
+            isPresented: $showConfirm, titleVisibility: .visible
+        ) {
+            Button("Move to Trash", role: .destructive) { reclaim() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            let preview = safeItems.prefix(6)
+                .map { "\($0.name)  (\(ByteCountFormatter.string(fromByteCount: $0.bytes, countStyle: .file)))" }
+                .joined(separator: "\n")
+            let overflow = safeItems.count - 6
+            Text(preview + (overflow > 0 ? "\n…and \(overflow) more" : "")
+                 + "\n\nOnly Safe items are included. Items go to the Trash and are recorded in History — you can put them back. Nothing is permanently deleted.")
+        }
+    }
+
+    /// Near-verbatim of ScanView.trashSelected(): route each safe item's URL
+    /// through SafeDeleteEngine.moveToTrash off-main (verdict()-gated + journaled
+    /// inside), surface a summary toast, then re-measure so the card's number and
+    /// the dashboard reflect the new state. Caution items are never sourced here.
+    private func reclaim() {
+        let chosen = safeItems
+        guard !chosen.isEmpty else { return }
+        let urls = chosen.map(\.url)
+        let names = chosen.map(\.name)
+        Task { @MainActor in
+            let outcomes = await Task.detached {
+                SafeDeleteEngine.moveToTrash(urls, names: names, context: "Reclaim now")
+            }.value
+            let succeeded = outcomes.filter(\.success).count
+            let reclaimed = outcomes.filter(\.success).reduce(Int64(0)) { $0 + $1.reclaimedBytes }
+            let refused = outcomes.count - succeeded
+            let sizeStr = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
+            toastStyle = refused > 0 ? .warning : .success
+            toast = "Moved \(succeeded) to Trash · \(sizeStr) reclaimed" + (refused > 0 ? " · \(refused) refused" : "")
+            // Re-measure so the card's number doesn't overstate what's left.
+            store.refresh()
+        }
     }
 }
 

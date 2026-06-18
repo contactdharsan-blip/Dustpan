@@ -21,8 +21,15 @@ import Observation
     var items: [ScannedItem] = []
     var selected: Set<ScannedItem.ID> = []
     var trashErrors: [ScannedItem.ID: String] = [:]
+    // Honesty channel (mirrors SizeReport): a leftover whose root was unreadable
+    // (bytes is a fake 0 → render "—") vs one with a denied subtree (bytes is a
+    // FLOOR → render "≥ <size>"). Keyed by item URL per the engine contract.
+    var deniedItems: Set<URL> = []
+    var partialItems: Set<URL> = []
     var toast: String?
     var toastStyle: ToastStyle = .success
+    /// Optional trailing action on the current toast (e.g. "Show in History").
+    var toastAction: ToastAction?
 }
 
 struct UninstallView: View {
@@ -54,7 +61,7 @@ struct UninstallView: View {
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .toast(message: $session.toast, style: session.toastStyle)
+        .toast(message: $session.toast, style: session.toastStyle, action: session.toastAction)
         .task { if session.phase == .loadingApps { await loadApps() } }
         .confirmationDialog(confirmTitle, isPresented: $showConfirm, titleVisibility: .visible) {
             Button("Move to Trash", role: .destructive) { trashSelected() }
@@ -106,11 +113,15 @@ struct UninstallView: View {
             GlassTextField(placeholder: "Search applications", text: $session.search)
             Text("\(filteredApps.count) of \(session.apps.count) apps · running apps must be quit before uninstalling · admin-installed apps ask for macOS authorization")
                 .font(.caption).foregroundStyle(Theme.textTertiary)
-            VStack(spacing: 10) {
-                ForEach(filteredApps) { app in
-                    AppRow(app: app,
-                           isRunning: app.bundleID.map(session.running.contains) ?? false,
-                           onChoose: { choose(app) })
+            if filteredApps.isEmpty {
+                emptyAppList
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(filteredApps) { app in
+                        AppRow(app: app,
+                               isRunning: app.bundleID.map(session.running.contains) ?? false,
+                               onChoose: { choose(app) })
+                    }
                 }
             }
 
@@ -149,16 +160,46 @@ struct UninstallView: View {
                 .font(.caption).foregroundStyle(Theme.textTertiary)
             VStack(spacing: 12) {
                 ForEach(Array(session.items.enumerated()), id: \.element.id) { index, item in
-                    ResultCard(
-                        item: item, index: index,
-                        isSelected: session.selected.contains(item.id),
-                        errorText: session.trashErrors[item.id],
-                        reduceMotion: reduceMotion,
-                        onToggle: { toggle(item) },
-                        onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
-                    )
+                    VStack(alignment: .leading, spacing: 6) {
+                        ResultCard(
+                            item: item, index: index,
+                            isSelected: session.selected.contains(item.id),
+                            errorText: session.trashErrors[item.id],
+                            reduceMotion: reduceMotion,
+                            onToggle: { toggle(item) },
+                            onReveal: { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+                        )
+                        // ResultCard shows item.sizeText verbatim; when the engine
+                        // flagged the size as unmeasurable (—) or a floor (≥ X),
+                        // append the honest qualifier rather than trust a fake 0.
+                        if let note = sizeHonestyNote(for: item) {
+                            Label(note, systemImage: "lock")
+                                .font(.caption).foregroundStyle(Theme.textTertiary)
+                                .padding(.leading, 16)
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    /// The §7.0 `empty` leg for the app list — distinguishes "no search match"
+    /// (offer a clear-search affordance) from "no apps found at all".
+    @ViewBuilder private var emptyAppList: some View {
+        if session.search.isEmpty {
+            EmptyStateView(
+                title: "No applications found",
+                message: "Nothing was found in /Applications or your user Applications folder.",
+                systemImage: "app.dashed")
+            .frame(maxWidth: .infinity)
+        } else {
+            EmptyStateView(
+                title: "No apps match “\(session.search)”",
+                message: "Try a different name, or clear the search to see everything.",
+                systemImage: "magnifyingglass",
+                actionTitle: "Clear search",
+                action: { session.search = "" })
+            .frame(maxWidth: .infinity)
         }
     }
 
@@ -200,6 +241,20 @@ struct UninstallView: View {
         .glassCard()
     }
 
+    /// The honest size qualifier for a leftover whose measurement was gated by a
+    /// permission error (mirrors SizeReport's —/≥ semantics). `nil` ⇒ the card's
+    /// `item.sizeText` is exact and needs no annotation. An item is in at most
+    /// one set per the engine contract.
+    private func sizeHonestyNote(for item: ScannedItem) -> String? {
+        if session.deniedItems.contains(item.url) {
+            return "Size — (permission denied — can't measure)"
+        }
+        if session.partialItems.contains(item.url) {
+            return "Size ≥ \(item.sizeText) (part of this is unreadable)"
+        }
+        return nil
+    }
+
     // MARK: Actions
 
     private func loadApps() async {
@@ -218,9 +273,11 @@ struct UninstallView: View {
             let found = await Task.detached(priority: .userInitiated) {
                 UninstallEngine.findUninstallItems(for: app)
             }.value
-            session.items = found
+            session.items = found.items
+            session.deniedItems = Set(found.deniedItems)
+            session.partialItems = Set(found.partialItems)
             // Pre-select the Safe tier (bundle + exact bundle-ID matches) only.
-            session.selected = Set(found.filter { $0.risk == .safe }.map(\.id))
+            session.selected = Set(found.items.filter { $0.risk == .safe }.map(\.id))
             session.trashErrors = [:]
             setPhase(.preview)
         }
@@ -255,9 +312,54 @@ struct UninstallView: View {
             session.toastStyle = refused > 0 ? .warning : .success
             session.toast = "Moved \(succeeded.count) to Trash · \(sizeStr) reclaimed"
                 + (refused > 0 ? " · \(refused) refused" : "")
+            // The toast promises "recorded in History" — give it a tap target.
+            // Undo puts this exact batch back via the canonical journal restore
+            // (Trash-side handles + its state guards), so the affordance is real.
+            let trashedPaths = Set(succeeded.map { $0.0.url.path })
+            session.toastAction = trashedPaths.isEmpty ? nil
+                : ToastAction(title: "Undo") { undoLastTrash(originalPaths: trashedPaths) }
             if session.items.isEmpty || trashedIDs.contains(where: { id in chosenItems.first(where: { $0.id == id })?.url == session.chosen?.url }) {
                 // The bundle itself is gone — back to a fresh app list.
                 session.items = []; session.selected = []; session.chosen = nil
+                setPhase(.loadingApps)
+                await loadApps()
+            }
+        }
+    }
+
+    /// Put the just-trashed batch back, routed through the canonical journal
+    /// restore (so this can't diverge from the History "Put back" path). Matches
+    /// the newest uninstaller entries whose original path is in `originalPaths`,
+    /// restores each that is still in the Trash, and reports the real outcome —
+    /// never a false "restored" if the item already left the Trash.
+    private func undoLastTrash(originalPaths: Set<String>) {
+        Task { @MainActor [session] in
+            let result = await Task.detached(priority: .userInitiated) { () -> (restored: Int, failed: Int) in
+                let (entries, _) = UndoJournal.load() // newest first
+                var seen = Set<String>()
+                var restored = 0, failed = 0
+                for entry in entries where entry.context == "App Uninstaller"
+                    && originalPaths.contains(entry.originalPath)
+                    && !seen.contains(entry.originalPath) {
+                    seen.insert(entry.originalPath) // only the most recent per path
+                    switch UndoJournal.restore(entry) {
+                    case .success:                restored += 1
+                    case .failure(let e):
+                        // Already-restored / gone-from-Trash isn't a real failure
+                        // to surface; only count genuine restore errors.
+                        if case .notRestorable = e { } else { failed += 1 }
+                    }
+                    if seen.count == originalPaths.count { break }
+                }
+                return (restored, failed)
+            }.value
+            session.toastAction = nil
+            session.toastStyle = result.failed > 0 ? .warning : .success
+            session.toast = result.restored > 0
+                ? "Put \(result.restored) back" + (result.failed > 0 ? " · \(result.failed) couldn't be restored" : "")
+                : "Nothing to put back — items already left the Trash"
+            // The bundle may be back on disk; refresh the app list so it reappears.
+            if session.phase != .preview {
                 setPhase(.loadingApps)
                 await loadApps()
             }

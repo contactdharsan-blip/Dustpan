@@ -27,6 +27,22 @@ struct InstalledApp: Identifiable, Hashable {
 
 enum UninstallEngine {
 
+    /// Scan outcome carrying the same honesty signal as SafeDeleteEngine.SizeReport,
+    /// per-item (finding 21): `size(of:)` collapsed a SizeReport to a bare Int64,
+    /// hiding denied/partial subtrees so an unreadable leftover read as "0 bytes".
+    /// We keep that signal here so the view can render "—"/"≥ X" instead of a fake 0.
+    ///   • `partialItems` — the item's URL whose byte total is a FLOOR (some subtree
+    ///     was permission-denied): display "≥ <size>".
+    ///   • `deniedItems`  — the item's URL whose root itself was unreadable
+    ///     (size is a fake 0): display "—" + a permission affordance.
+    /// An item appears in at most one of the two sets; absence from both ⇒ its
+    /// `bytes` is an exact, fully-walked measurement.
+    struct ScanResult: Equatable {
+        var items: [ScannedItem] = []
+        var partialItems: [URL] = []
+        var deniedItems: [URL] = []
+    }
+
     /// The ~/Library roots where macOS apps leave per-app files. Each entry
     /// declares HOW children map back to an app: by bundle ID or by app name.
     /// Group Containers is deliberately absent in v1.0 — its "{TEAMID}.group"
@@ -97,32 +113,40 @@ enum UninstallEngine {
 
     /// Everything the app left in ~/Library, plus the bundle itself (first item).
     /// Exact matches only; every item carries provenance (A4) in its detail.
-    static func findUninstallItems(for app: InstalledApp) -> [ScannedItem] {
+    /// Returns a ScanResult so a denied/partial leftover surfaces as "—"/"≥ X"
+    /// rather than a fake "0 bytes" (finding 21).
+    static func findUninstallItems(for app: InstalledApp) -> ScanResult {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        var items: [ScannedItem] = []
+        var result = ScanResult()
+
+        /// Append an item, recording its denial/floor signal from the SizeReport
+        /// so a collapsed Int64 can never hide an unreadable subtree.
+        func append(name: String, url: URL, risk: CleanRisk, detail: String) {
+            let report = SafeDeleteEngine.sizeReport(of: url)
+            result.items.append(ScannedItem(name: name, url: url, bytes: report.bytes,
+                                            risk: risk, detail: detail))
+            if report.rootDenied { result.deniedItems.append(url) }
+            else if report.deniedCount > 0 { result.partialItems.append(url) }
+        }
 
         // The bundle itself — Safe: the user explicitly chose this app. Root-owned
         // bundles (App Store / root installer) are offered too: the engine
         // delegates those to Finder, which asks for admin authorization in-app.
-        let bundleBytes = SafeDeleteEngine.size(of: app.url)
         let adminNote = app.needsAdminToDelete
             ? " macOS will ask for admin authorization when it moves to Trash."
             : ""
-        items.append(ScannedItem(
-            name: "\(app.name).app", url: app.url, bytes: bundleBytes, risk: .safe,
-            detail: "The application bundle itself." + adminNote + provenance(of: app.url)))
+        append(name: "\(app.name).app", url: app.url, risk: .safe,
+               detail: "The application bundle itself." + adminNote + provenance(of: app.url))
 
         for root in leftoverRoots {
             if Task.isCancelled { break }
             let rootURL = home.appendingPathComponent(root.relativePath)
             for match in matches(in: rootURL, kind: root.kind, bundleID: app.bundleID, appName: app.name) {
-                let bytes = SafeDeleteEngine.size(of: match.url)
                 // Zero-byte plists are still real leftovers; only skip true misses.
                 guard FileManager.default.fileExists(atPath: match.url.path) else { continue }
-                items.append(ScannedItem(
-                    name: "\(root.relativePath.replacingOccurrences(of: "Library/", with: "")) — \(match.url.lastPathComponent)",
-                    url: match.url, bytes: bytes, risk: match.risk,
-                    detail: match.reason + provenance(of: match.url)))
+                append(name: "\(root.relativePath.replacingOccurrences(of: "Library/", with: "")) — \(match.url.lastPathComponent)",
+                       url: match.url, risk: match.risk,
+                       detail: match.reason + provenance(of: match.url))
             }
         }
         // LaunchAgents: plists whose filename starts with the bundle ID
@@ -133,14 +157,13 @@ enum UninstallEngine {
             if let plists = try? FileManager.default.contentsOfDirectory(
                 at: agents, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for plist in plists where plist.lastPathComponent.hasPrefix(bundleID) {
-                    items.append(ScannedItem(
-                        name: "LaunchAgents — \(plist.lastPathComponent)",
-                        url: plist, bytes: SafeDeleteEngine.size(of: plist), risk: .caution,
-                        detail: "Launch agent registered by the app." + provenance(of: plist)))
+                    append(name: "LaunchAgents — \(plist.lastPathComponent)",
+                           url: plist, risk: .caution,
+                           detail: "Launch agent registered by the app." + provenance(of: plist))
                 }
             }
         }
-        return items
+        return result
     }
 
     private struct Match { let url: URL; let risk: CleanRisk; let reason: String }
@@ -180,7 +203,9 @@ enum UninstallEngine {
     /// (com.spotify.webhelper survives if com.spotify.client is installed).
     /// Everything returned is Caution — orphan inference is heuristic (D-rule:
     /// when ownership can't be proven, say so, don't guess Safe).
-    static func scanOrphans() -> [ScannedItem] {
+    /// Returns a ScanResult so a denied/partial orphan surfaces as "—"/"≥ X"
+    /// rather than a fake "0 bytes" (finding 21).
+    static func scanOrphans() -> ScanResult {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let installed = listInstalledApps()
         var livePrefixes = Set<String>()
@@ -188,7 +213,7 @@ enum UninstallEngine {
             livePrefixes.insert(vendorPrefix(of: id))
         }
 
-        var items: [ScannedItem] = []
+        var result = ScanResult()
         let scanRoots = ["Library/Application Support", "Library/Caches", "Library/Containers",
                          "Library/HTTPStorages", "Library/Saved Application State",
                          "Library/Preferences", "Library/LaunchAgents"]
@@ -208,17 +233,20 @@ enum UninstallEngine {
                 guard let candidate = bundleIDCandidate(from: child.lastPathComponent) else { continue }
                 if candidate.hasPrefix("com.apple.") || candidate == "com.apple" { continue } // OS-owned, always
                 if livePrefixes.contains(vendorPrefix(of: candidate)) { continue }
-                let bytes = SafeDeleteEngine.size(of: child)
+                let report = SafeDeleteEngine.sizeReport(of: child)
                 let area = rel.replacingOccurrences(of: "Library/", with: "")
-                items.append(ScannedItem(
+                result.items.append(ScannedItem(
                     name: "\(area) — \(child.lastPathComponent)",
-                    url: child, bytes: bytes, risk: .caution,
+                    url: child, bytes: report.bytes, risk: .caution,
                     detail: "Looks owned by “\(candidate)” — no installed app matches that vendor."
                             + provenance(of: child),
                     ownerApp: vendorPrefix(of: candidate)))
+                if report.rootDenied { result.deniedItems.append(child) }
+                else if report.deniedCount > 0 { result.partialItems.append(child) }
             }
         }
-        return items.sorted { $0.bytes > $1.bytes }
+        result.items.sort { $0.bytes > $1.bytes }
+        return result
     }
 
     /// "com.spotify.client.plist" → "com.spotify.client"; non-reverse-DNS names
