@@ -18,10 +18,12 @@ mkdir -p "$OUT_DIR"
 # Views (SwiftUI) are deliberately excluded — the CLI is a pure engine consumer.
 ENGINES=(
   "$SRC/SafeDeleteEngine.swift"
+  "$SRC/ExclusionList.swift"
   "$SRC/StatsEngine.swift"
   "$SRC/DuplicateEngine.swift"
   "$SRC/LargeFileEngine.swift"
   "$SRC/ClutterEngine.swift"
+  "$SRC/AppSlimmingEngine.swift"
   "$SRC/DockerReclaimEngine.swift"
   "$SRC/UninstallEngine.swift"
   "$SRC/LoginItemsEngine.swift"

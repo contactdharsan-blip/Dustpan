@@ -23,28 +23,52 @@ enum ClutterEngine {
     static let capturePrefixes = ["Screenshot ", "Screen Shot ", "Screen Recording "]
     static let captureExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "mov", "mp4"]
 
-    static func scan() -> [ScannedItem] {
+    /// Scan outcome carrying the same honesty signal as SafeDeleteEngine.SizeReport:
+    /// `deniedRoots` are the ~/Downloads or ~/Desktop folders macOS refused outright
+    /// (permission-denied), so the surface can render "—" + a permission affordance
+    /// instead of an empty "nothing found". A root that simply doesn't exist is not
+    /// a denial. Empty `deniedRoots` ⇒ both folders were readable.
+    struct ScanResult: Equatable {
+        var items: [ScannedItem] = []
+        var deniedRoots: [URL] = []
+    }
+
+    static func scan() -> ScanResult {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let downloads = home.appendingPathComponent("Downloads")
         let desktop = home.appendingPathComponent("Desktop")
 
+        // Load Protected Folders once per scan (not per file) and skip anything
+        // the user hard-blocked. verdict() still gates the delete — scan-time half.
+        let protected = ExclusionList.list()
         var found: [(item: ScannedItem, date: Date?)] = []
-        found += installers(in: downloads)
-        found += captures(in: desktop)
-        found += captures(in: downloads)
+        var deniedRoots: [URL] = []
+        // De-dupe denials: ~/Downloads is probed by both installers() and
+        // captures(); a denied root must be reported once, not twice.
+        var deniedSeen = Set<String>()
+        func note(denied root: URL) {
+            if deniedSeen.insert(root.path).inserted { deniedRoots.append(root) }
+        }
+        found += installers(in: downloads, protected: protected, onDenied: note)
+        found += captures(in: desktop, protected: protected, onDenied: note)
+        found += captures(in: downloads, protected: protected, onDenied: note)
 
         // Oldest first; undatable items sink to the end rather than posing as old.
-        return found
+        let items = found
             .sorted { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
             .map(\.item)
+        return ScanResult(items: items, deniedRoots: deniedRoots)
     }
 
     // MARK: Discovery (one top-level listdir each — no tree walking)
 
-    private static func installers(in dir: URL) -> [(ScannedItem, Date?)] {
-        children(of: dir)
+    private static func installers(in dir: URL, protected: [String],
+                                   onDenied: (URL) -> Void) -> [(ScannedItem, Date?)] {
+        if ExclusionList.isExcluded(dir, protected: protected) { return [] } // protected → skip entirely
+        return children(of: dir, onDenied: onDenied)
             .filter { installerExtensions.contains($0.pathExtension.lowercased()) }
             .compactMap { url in
+                if ExclusionList.isExcluded(url, protected: protected) { return nil } // protected item
                 let date = bestDate(of: url)
                 let item = ScannedItem(
                     name: url.lastPathComponent,
@@ -57,13 +81,16 @@ enum ClutterEngine {
             }
     }
 
-    private static func captures(in dir: URL) -> [(ScannedItem, Date?)] {
-        children(of: dir)
+    private static func captures(in dir: URL, protected: [String],
+                                 onDenied: (URL) -> Void) -> [(ScannedItem, Date?)] {
+        if ExclusionList.isExcluded(dir, protected: protected) { return [] } // protected → skip entirely
+        return children(of: dir, onDenied: onDenied)
             .filter { url in
                 captureExtensions.contains(url.pathExtension.lowercased())
                     && capturePrefixes.contains { url.lastPathComponent.hasPrefix($0) }
             }
             .compactMap { url in
+                if ExclusionList.isExcluded(url, protected: protected) { return nil } // protected item
                 let date = bestDate(of: url)
                 let isRecording = url.lastPathComponent.hasPrefix("Screen Recording ")
                 let item = ScannedItem(
@@ -77,15 +104,21 @@ enum ClutterEngine {
             }
     }
 
-    /// Top-level regular files/bundles of one directory. A denied or missing
-    /// root yields [] — the surface's empty state says "nothing found", which
-    /// is honest for both (we never had a number to misreport).
-    private static func children(of dir: URL) -> [URL] {
-        (try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: [.addedToDirectoryDateKey, .creationDateKey,
-                                         .contentModificationDateKey],
-            options: [.skipsHiddenFiles])) ?? []
+    /// Top-level regular files/bundles of one directory. A permission-denied root
+    /// reports through `onDenied` (so the surface can show "—", never a fake clean
+    /// empty state); a merely-missing root yields [] silently (we never had a
+    /// number to misreport — "nothing found" is honest there).
+    private static func children(of dir: URL, onDenied: (URL) -> Void) -> [URL] {
+        do {
+            return try FileManager.default.contentsOfDirectory(
+                at: dir,
+                includingPropertiesForKeys: [.addedToDirectoryDateKey, .creationDateKey,
+                                             .contentModificationDateKey],
+                options: [.skipsHiddenFiles])
+        } catch {
+            if SafeDeleteEngine.isPermissionError(error) { onDenied(dir) }
+            return []
+        }
     }
 
     /// When this thing appeared: date-added to its folder (closest to "when did

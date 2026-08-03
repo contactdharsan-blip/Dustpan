@@ -157,14 +157,27 @@ struct SystemDataView: View {
                 let finderBytes = finderVisibleUsages.reduce(Int64(0)) { $0 + ($1.bytes ?? 0) }
                 HStack(spacing: 28) {
                     CountUpMetric(value: disk.usedText, label: "Used (ground truth)")
-                    CountUpMetric(
-                        value: snapshot.isComplete
-                            ? ByteCountFormatter.string(fromByteCount: finderBytes, countStyle: .file) : "—",
-                        label: "Stuff Finder shows you")
-                    CountUpMetric(
-                        value: estimateBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "—",
-                        label: "“System Data” side (our estimate)")
+                    let finderValue = snapshot.isComplete
+                        ? ByteCountFormatter.string(fromByteCount: finderBytes, countStyle: .file) : "—"
+                    let estimateValue = estimateBytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "—"
+                    // Finding 40: when a metric's value is the honest-unknown "—",
+                    // VoiceOver would read "dash"; collapse it to one phrase that
+                    // names the unknown alongside the metric's label.
+                    CountUpMetric(value: finderValue, label: "Stuff Finder shows you")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(finderValue == "—"
+                            ? "Stuff Finder shows you: unknown, size unavailable"
+                            : "Stuff Finder shows you: \(finderValue)")
+                    CountUpMetric(value: estimateValue, label: "“System Data” side (our estimate)")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(estimateValue == "—"
+                            ? "System Data side, our estimate: unknown, size unavailable"
+                            : "System Data side, our estimate: \(estimateValue)")
                     CountUpMetric(value: coverageText, label: "Of Used we itemized")
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel(coverageText == "—"
+                            ? "Of Used we itemized: unknown, not available"
+                            : "Of Used we itemized: \(coverageText)")
                 }
                 Text("Used space comes from the same volume statistics `df` reads — verify it yourself in Terminal. The two halves plus the unindexed slice below sum back to Used; nothing is estimated or inflated."
                      + (snapshot.disk?.purgeable != nil
@@ -273,12 +286,17 @@ struct SystemDataView: View {
                     .font(.subheadline)
                     .foregroundStyle(Theme.textPrimary)
                     .lineLimit(1)
+                // Finding 3: a denied root renders "—"; give the user the same
+                // way forward diagnosticRow offers, never a dead em-dash.
+                if usage.needsPermission { PermissionBadgeButton() }
                 Spacer(minLength: 8)
                 if usage.isMeasured || usage.rootDenied {
                     Text(usage.sizeText)
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
                         .foregroundStyle(Theme.textPrimary)
                         .frame(minWidth: 70, alignment: .trailing)
+                        // Finding 40: "—" reads as "dash" to VoiceOver — name it.
+                        .accessibilityLabel(usage.sizeText == "—" ? "size unavailable" : usage.sizeText)
                 } else {
                     SkeletonView(width: 70, height: 14)
                 }
@@ -312,6 +330,10 @@ struct SystemDataView: View {
                     .font(.subheadline.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(Theme.textPrimary)
                     .frame(minWidth: 70, alignment: .trailing)
+                    // Finding 40: name the honest-unknown "—" for VoiceOver.
+                    .accessibilityLabel(snapshot.unaccountedBytes.map {
+                        ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)
+                    } ?? "size unavailable")
             }
             Text(remainderCaption(snapshot))
                 .font(.caption)
@@ -508,6 +530,8 @@ struct SystemDataView: View {
                                 Text("—")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(Theme.textTertiary)
+                                    // Finding 40: don't let VoiceOver say "dash".
+                                    .accessibilityLabel("size unavailable")
                             }
                         }
                     }

@@ -87,6 +87,7 @@ enum SidebarItem: Hashable, Identifiable {
     case diskMap
     case category(CleanupCategory)
     case loginItems
+    case protectedFolders
     case history
 
     var id: String {
@@ -96,6 +97,7 @@ enum SidebarItem: Hashable, Identifiable {
         case .diskMap: return "disk-map"
         case .category(let c): return c.id
         case .loginItems: return "login-items"
+        case .protectedFolders: return "protected-folders"
         case .history: return "history"
         }
     }
@@ -106,12 +108,16 @@ enum SidebarItem: Hashable, Identifiable {
 struct ContentView: View {
     @State private var selection: SidebarItem? = .overview
     /// App-scoped so sidebar round-trips don't restart the dashboard measurement.
-    @State private var store = StatsStore()
+    // Owned by DustpanApp and shared with the menu-bar scene. An @Observable
+    // passed as a plain `let` still drives view updates via Observation.
+    let store: StatsStore
     /// App-scoped scan state (same pattern as StatsStore): results and in-flight
     /// scans survive sidebar switches — the view dies, the session doesn't.
     @State private var scanSessions: [CleanupCategory: ScanSession] = Dictionary(
         uniqueKeysWithValues: CleanupCategory.allCases.map { ($0, ScanSession()) })
     @State private var uninstallSession = UninstallSession()
+    /// App-scoped so the protected-folder list survives sidebar round-trips.
+    @State private var protectedStore = ProtectedFoldersStore()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage(PrefKey.permissionFlowCompleted) private var permissionFlowCompleted = false
     @State private var showPermissionGate = false
@@ -136,6 +142,9 @@ struct ContentView: View {
                 Label("Login Items", systemImage: "power")
                     .badge("report-only")
                     .tag(SidebarItem.loginItems)
+                Label("Protected Folders", systemImage: "lock.shield")
+                    .badge("excluded")
+                    .tag(SidebarItem.protectedFolders)
                 Label("History", systemImage: "clock.arrow.circlepath")
                     .badge("audit")
                     .tag(SidebarItem.history)
@@ -163,9 +172,11 @@ struct ContentView: View {
                 case .category(let category):
                     // Force-unwrap is total by construction: the dictionary is
                     // initialized over CleanupCategory.allCases.
-                    ScanView(category: category, session: scanSessions[category]!).id(category)
+                    ScanView(category: category, session: scanSessions[category]!, navigate: { selection = $0 }).id(category)
                 case .loginItems:
                     LoginItemsView().id(SidebarItem.loginItems)
+                case .protectedFolders:
+                    ProtectedFoldersView(store: protectedStore).id(SidebarItem.protectedFolders)
                 case .history:
                     HistoryView().id(SidebarItem.history)
                 case nil:
@@ -203,12 +214,19 @@ struct ContentView: View {
     var phase: Phase = .idle
     var items: [ScannedItem] = []
     var selected: Set<ScannedItem.ID> = []
+    /// Scan roots macOS refused outright (permission-denied) on the last scan.
+    /// Non-empty means we cannot honestly claim "nothing to clean" — some of the
+    /// disk was never seen. Cleared on every new scan.
+    var deniedRoots: [URL] = []
     var filter = ""
     /// Refusal reasons per item (SafeDeleteEngine promises these are surfaced,
     /// never silently swallowed). Cleared on every new scan.
     var trashErrors: [ScannedItem.ID: String] = [:]
     var toast: String?
     var toastStyle: ToastStyle = .success
+    /// Optional trailing toast button (e.g. post-trash "Show in History"). Set
+    /// alongside `toast`; cleared on the next toast that has no action.
+    var toastAction: ToastAction?
     var scanTask: Task<Void, Never>?
 }
 
@@ -218,6 +236,9 @@ struct ScanView: View {
 
     let category: CleanupCategory
     @Bindable var session: ScanSession
+    /// Lets the post-trash toast jump to History (the undo surface) without
+    /// owning navigation itself.
+    var navigate: (SidebarItem) -> Void = { _ in }
 
     /// Transient chrome only — everything that should outlive the view lives in the session.
     @State private var showConfirm = false
@@ -233,6 +254,23 @@ struct ScanView: View {
     private var selectedItems: [ScannedItem] { session.items.filter { session.selected.contains($0.id) } }
     private var selectedBytes: Int64 { selectedItems.reduce(0) { $0 + $1.bytes } }
 
+    /// Duplicate-only confirm-dialog guard (finding 6): names every group whose
+    /// every byte-identical copy — suggested-keep included — is in the current
+    /// selection, so confirming would leave no copy of that file on disk. Empty
+    /// for non-duplicate categories and whenever at least one copy survives.
+    private var lastCopyWarning: String {
+        guard category == .duplicates, !selectedItems.isEmpty else { return "" }
+        let selectedIDs = session.selected
+        let wipedGroups = Dictionary(grouping: session.items) { $0.ownerApp ?? "ungrouped" }
+            .filter { _, group in group.count > 1 && group.allSatisfy { selectedIDs.contains($0.id) } }
+            .compactMap { _, group in group.first(where: \.suggestedKeep)?.name ?? group.first?.name }
+            .sorted()
+        guard !wipedGroups.isEmpty else { return "" }
+        let names = wipedGroups.prefix(3).joined(separator: ", ")
+            + (wipedGroups.count > 3 ? ", and \(wipedGroups.count - 3) more" : "")
+        return "\n\n⚠️ This includes the suggested keep — confirming leaves NO copy of: \(names)."
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -244,7 +282,7 @@ struct ScanView: View {
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .toast(message: $session.toast, style: session.toastStyle)
+        .toast(message: $session.toast, style: session.toastStyle, action: session.toastAction)
         .quickLookPreview($quickLookURL)
         .confirmationDialog(
             "Move \(session.selected.count) item\(session.selected.count == 1 ? "" : "s") to Trash?",
@@ -268,7 +306,11 @@ struct ScanView: View {
                  + "\n\nItems go to the Trash and are recorded in History — you can put them back. Nothing is permanently deleted."
                  + (hiddenCount > 0
                     ? " Includes \(hiddenCount) selected item\(hiddenCount == 1 ? "" : "s") not shown by the current filter."
-                    : ""))
+                    : "")
+                 // Duplicate-only: warn before the last copy of a group leaves
+                 // the disk. The suggested-keep is individually selectable, so a
+                 // "select all + keep" sequence can quietly trash every copy.
+                 + lastCopyWarning)
         }
     }
 
@@ -361,6 +403,9 @@ struct ScanView: View {
 
         case .results:
             summary
+            // Honest disclosure when the scan found things AND hit a wall: the
+            // list below is a floor, not the whole picture (findings 5 + 23).
+            if !session.deniedRoots.isEmpty { deniedBanner }
             Text(category == .orphanScan
                  ? "Grouped by the app the files belonged to — the header selects a whole group. Everything is Caution: verify before trashing."
                  : category == .duplicates
@@ -382,14 +427,71 @@ struct ScanView: View {
             }
 
         case .empty:
+            // Distinct DENIED leg (findings 5 + 23): if a scan root was refused
+            // we found nothing *that we could see* — never claim "nothing to
+            // clean" over a permission wall. Em-dash honesty, plus a path back in.
+            if session.deniedRoots.isEmpty {
+                EmptyStateView(
+                    title: "Nothing to clean",
+                    message: "A \(category.supportsModes ? session.mode.rawValue.lowercased() + " " : "")scan found nothing reclaimable here.",
+                    systemImage: "checkmark.seal",
+                    actionTitle: category.supportsModes && session.mode == .quick ? "Deep scan" : nil,
+                    action: category.supportsModes && session.mode == .quick ? { session.mode = .deep; startScan() } : nil
+                )
+                .frame(maxWidth: .infinity)
+            } else {
+                deniedEmptyState
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// The folders macOS refused, shown verbatim so the denial is auditable.
+    private var deniedRootLines: String {
+        session.deniedRoots
+            .map { $0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") }
+            .joined(separator: "\n")
+    }
+
+    /// Inline banner over a results list when *some* roots were denied: the list
+    /// is honest but partial. Calm, not alarmist — and offers the way back in.
+    private var deniedBanner: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(Theme.warning)
+                Text("Partial results — \(session.deniedRoots.count) folder\(session.deniedRoots.count == 1 ? " was" : "s were") unreadable")
+                    .font(Typo.cardHeading).foregroundStyle(Theme.textPrimary)
+                Spacer()
+                PermissionBadgeButton()
+            }
+            Text("These show as “—”, not 0 — Dustpan never saw inside them:\n\(deniedRootLines)\n\nGrant Full Disk Access, then rescan to include them.")
+                .font(.caption).foregroundStyle(Theme.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassCard(cornerRadius: Theme.radiusXl)
+    }
+
+    /// Full-pane denied state shown in place of "Nothing to clean" when the scan
+    /// found nothing AND a root was refused: we genuinely don't know if it's clean.
+    private var deniedEmptyState: some View {
+        VStack(spacing: 16) {
             EmptyStateView(
-                title: "Nothing to clean",
-                message: "A \(category.supportsModes ? session.mode.rawValue.lowercased() + " " : "")scan found nothing reclaimable here.",
-                systemImage: "checkmark.seal",
-                actionTitle: category.supportsModes && session.mode == .quick ? "Deep scan" : nil,
-                action: category.supportsModes && session.mode == .quick ? { session.mode = .deep; startScan() } : nil
+                title: "Couldn’t see everything",
+                message: "Nothing reclaimable was found in the folders Dustpan could read — but \(session.deniedRoots.count) folder\(session.deniedRoots.count == 1 ? " was" : "s were") refused by macOS, so this isn’t a clean bill. Those folders read “—”, never 0:\n\n\(deniedRootLines)",
+                systemImage: "lock.shield"
             )
-            .frame(maxWidth: .infinity)
+            HStack(spacing: 12) {
+                Button("Open Full Disk Access") { PermissionBadgeButton.openFullDiskAccessSettings() }
+                    .buttonStyle(PrimaryButtonStyle())
+                Button("Rescan") { startScan() }
+                    .buttonStyle(GlassButtonStyle())
+            }
+            Text("Grant access in System Settings, then rescan.")
+                .font(.caption).foregroundStyle(Theme.textTertiary)
         }
     }
 
@@ -499,6 +601,7 @@ struct ScanView: View {
     private func startScan() {
         session.scanTask?.cancel()
         session.filter = ""; session.selected = []; session.trashErrors = [:]
+        session.deniedRoots = []
         setPhase(.scanning)
         // The Task captures the app-scoped session (a class), so a scan finishing
         // after the user switched tabs still lands its results — nothing is lost
@@ -512,29 +615,34 @@ struct ScanView: View {
             // Cancellation must be propagated by hand into the detached task
             // (the engines poll Task.isCancelled), so Cancel stops the disk
             // walk itself — not just the UI while I/O burns on in the background.
-            let walk = Task.detached(priority: .userInitiated) { () -> [ScannedItem] in
+            // Carries both legs of the engines' honesty contract: the items and
+            // the roots macOS refused (so "nothing to clean" can't hide a wall).
+            let walk = Task.detached(priority: .userInitiated) { () -> (items: [ScannedItem], denied: [URL]) in
                 switch cat {
-                case .developerCaches: return SafeDeleteEngine.scanReclaimable(mode: scanMode)
-                case .orphanScan: return UninstallEngine.scanOrphans()
-                case .largeFiles: return LargeFileEngine.scan(mode: scanMode)
-                case .clutter: return ClutterEngine.scan()
-                case .duplicates: return DuplicateEngine.scan(mode: scanMode)
-                case .appUninstaller: return [] // routed to UninstallView, never here
+                case .developerCaches: return (SafeDeleteEngine.scanReclaimable(mode: scanMode), [])
+                case .orphanScan: return (UninstallEngine.scanOrphans().items, [])
+                case .largeFiles: let r = LargeFileEngine.scan(mode: scanMode); return (r.items, r.deniedRoots)
+                case .clutter: let r = ClutterEngine.scan(); return (r.items, r.deniedRoots)
+                case .duplicates: let r = DuplicateEngine.scan(mode: scanMode); return (r.items, r.deniedRoots)
+                case .appUninstaller: return ([], []) // routed to UninstallView, never here
                 }
             }
-            let found = await withTaskCancellationHandler {
+            let result = await withTaskCancellationHandler {
                 await walk.value
             } onCancel: {
                 walk.cancel()
             }
             guard !Task.isCancelled else { return }
+            let found = result.items
             session.items = found
+            session.deniedRoots = result.denied
             // Pre-select the .safe items; leave .caution for the user to opt into.
             session.selected = Set(found.filter { $0.risk == .safe }.map(\.id))
             setPhase(found.isEmpty ? .empty : .results)
             if !found.isEmpty {
                 let size = ByteCountFormatter.string(fromByteCount: found.reduce(0) { $0 + $1.bytes }, countStyle: .file)
                 session.toastStyle = .success
+                session.toastAction = nil
                 session.toast = "Found \(size) across \(found.count) item\(found.count == 1 ? "" : "s") — read-only until you confirm"
             }
         }
@@ -567,6 +675,10 @@ struct ScanView: View {
             let sizeStr = ByteCountFormatter.string(fromByteCount: reclaimed, countStyle: .file)
             let refused = outcomes.count - succeeded.count
             session.toastStyle = refused > 0 ? .warning : .success
+            // Name the path to undo (finding 10): every trash lands in History,
+            // where each entry can be put back — so the toast jumps straight there.
+            session.toastAction = succeeded.isEmpty ? nil
+                : ToastAction(title: "Show in History") { navigate(.history) }
             session.toast = "Moved \(succeeded.count) to Trash · \(sizeStr) reclaimed" + (refused > 0 ? " · \(refused) refused" : "")
             if session.items.isEmpty { setPhase(.empty) }
         }
@@ -714,6 +826,11 @@ struct ResultCard: View {
             }
             if errorText != nil {
                 StatusBadge(kind: .caution, text: "Refused")
+            } else if item.suggestedKeep {
+                // Duplicate-only (finding 7): the copy Dustpan suggests keeping
+                // wears its own badge, never the generic Caution every other copy
+                // carries — so "keep this one" reads at a glance.
+                StatusBadge(kind: .safe, text: "Suggested keep")
             } else {
                 StatusBadge(kind: item.risk.status)
             }
@@ -739,7 +856,7 @@ struct ResultCard: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(store: StatsStore())
         .frame(width: 880, height: 620)
         .preferredColorScheme(.dark)
 }

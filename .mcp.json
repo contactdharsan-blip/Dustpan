@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "linkedin": {
+      "type": "http",
+      "url": "https://linkedin.run.mcp.com.ai/mcp"
+    },
+    "sh": {
+      "type": "http",
+      "url": "https://sh.inference.ac"
+    }
+  }
+}

@@ -97,11 +97,17 @@ struct DiskTotals: Equatable {
 }
 
 /// The 0–100 cleanliness score, carrying its own reproducible inputs so the
-/// number is auditable next to it. value == round(percentFree − reclaimablePenalty).
+/// number is auditable next to it. Cleanliness == how little REMOVABLE cruft you
+/// carry, NOT how empty the disk is (free space is its own KPI). Decoupled from
+/// capacity on purpose: a near-full disk of legitimate files is *clean*, and a
+/// half-empty disk full of stale caches is not. value == round((1 − cruft/used)·100),
+/// cruft = reclaimableBytes + trashBytes — so emptying Trash and clearing caches
+/// visibly moves the number, which a percent-free score never did.
 struct CleanlinessScore: Equatable {
     let value: Int                  // 0...100
-    let freeFraction: Double        // input 1
-    let reclaimableBytes: Int64     // input 2 (drives the penalty)
+    let usedBytes: Int64            // denominator: your stuff on disk
+    let reclaimableBytes: Int64     // cruft input 1 (caches, logs, dev junk)
+    let trashBytes: Int64           // cruft input 2 (~/.Trash)
     let inputsSummary: [String]     // human-readable inputs to show beside the score
 }
 
@@ -144,6 +150,9 @@ struct StatsSnapshot {
     var unaccountedLabel: String { "System & other (not itemized)" }
 
     var reclaimableBytes: Int64 { reclaimable.reduce(0) { $0 + $1.bytes } }
+    /// Bytes sitting in ~/.Trash — already-discarded files, counted as cruft for
+    /// the score. 0 when still sizing or the root was denied (home, so rare).
+    var trashBytes: Int64 { categories.first { $0.category.id == "trash" }?.bytes ?? 0 }
     var cacheLocationsFound: Int { reclaimable.count }
     /// Gated on isComplete so a half-finished scan never crowns a transient winner.
     var largestCategory: CategoryUsage? {
@@ -151,22 +160,28 @@ struct StatsSnapshot {
         return categories.filter { $0.bytes != nil }.max { ($0.bytes ?? 0) < ($1.bytes ?? 0) }
     }
 
-    /// nil until isComplete. value = round(freeFraction*100 − penaltyPts),
-    /// penaltyPts = min(reclaimableBytes / totalCapacity * 100, 10), clamped 0...100.
+    /// nil until isComplete. Cleanliness = the share of your USED space that is
+    /// NOT removable cruft: value = round((1 − cruft/used)·100), clamped 0...100,
+    /// cruft = reclaimableBytes + trashBytes. Denominator is `used`, never total
+    /// capacity — so the number reflects how junky your stuff is, independent of
+    /// disk size, and the app's own actions (empty Trash, clear caches) move it.
+    /// With used == 0 (an empty volume) there is nothing to be dirty, so 100.
     var score: CleanlinessScore? {
         guard isComplete, let disk else { return nil }
-        let free = disk.freeFraction
-        let penaltyPts = disk.totalCapacity > 0
-            ? min(Double(reclaimableBytes) / Double(disk.totalCapacity) * 100, 10) : 0
-        let v = Int((free * 100 - penaltyPts).rounded())
+        let cruft = reclaimableBytes + trashBytes
+        let used = disk.used
+        let ratio = used > 0 ? Double(cruft) / Double(used) : 0
+        let v = Int(((1 - ratio) * 100).rounded())
+        let fmt = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
         return CleanlinessScore(
             value: max(0, min(100, v)),
-            freeFraction: free,
+            usedBytes: used,
             reclaimableBytes: reclaimableBytes,
+            trashBytes: trashBytes,
             inputsSummary: [
-                "\(Int((free * 100).rounded()))% of disk free",
-                ByteCountFormatter.string(fromByteCount: reclaimableBytes, countStyle: .file)
-                    + " reclaimable now (penalty up to 10 pts)",
+                fmt(reclaimableBytes) + " reclaimable now (quick scan: caches, logs, dev junk)",
+                fmt(trashBytes) + " in Trash",
+                "= \(Int((ratio * 100).rounded()))% of your \(fmt(used)) used space is removable",
             ]
         )
     }
